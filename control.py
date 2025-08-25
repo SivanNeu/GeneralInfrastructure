@@ -89,7 +89,7 @@ class Control():
 
         self._accel_cmd_ned = None
 
-        self._control_logger = Logger("control_logs", log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
+        self._control_logger = Logger("control_logs_"+controller.controllerType+"_"+time.strftime("%Y%m%d_%H%M%S"), log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
         # self._control_input_logger = Logger("control_input", log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")       
        
         # self._current_error_horizontal_rad = 0
@@ -115,7 +115,7 @@ class Control():
 ###############################################################################################################################################
     def get_cmd(self, pos_ned, vel_ned, accel_ned, gyro_ned, 
                         quat_ned_bodyfrd, imu_ts, step_dt, current_ts,
-                        counter, trajDest_ned, currentData=None,  
+                        counter, trajDest_ned, currentData,  
                         headingDest=None, controlType=None, log_data=True,
                         homingStage=None):
 
@@ -142,11 +142,19 @@ class Control():
         desiredBodyState = [(pos_des_ned, vel_des_ned, accel_des_ned, np.zeros(3), np.zeros(3)), # desired position, velocity and acceleration (taken from trajectory)
                         (b1d_ned, b1d_dot, b1d_ddot)]   # desired direction of the first body axis (taken from trajectory)
         
-        f_total, R_desired, Omega_desired_frd = self.controlnode.getCommand(currentBodyState, desiredBodyState, controlType, currentData)
+        controResults = self.controlnode.getCommand(currentBodyState, desiredBodyState, controlType, currentData)
+        f_total, R_desired, Omega_desired_frd  = controResults[0], controResults[1], controResults[2]
+        if len(controResults) > 3:
+            obs_tensor = controResults[3]
+        else:
+            obs_tensor = None
         # f_total_ref, R_desired_ref, Omega_desired_frd_ref = self.controlnode_ref.getCommand(currentBodyState, desiredBodyState, controlType)
 
         if self.controlnode.controllerType == "VelocityPID":
-            velCmdDir = f_total/np.linalg.norm(f_total)
+            velCmdDir = np.zeros(3)
+            if np.linalg.norm(f_total) > 0:
+                velCmdDir = f_total/np.linalg.norm(f_total)
+                
             velCmdAbs = np.linalg.norm(f_total)
             velCmdAbsClipped = np.clip(velCmdAbs, 0, self.maximalVelocity)
             velCmd = velCmdDir * velCmdAbsClipped
@@ -175,7 +183,8 @@ class Control():
             self.log_control_data(command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd,Omega_desired_frd=Omega_desired_frd,
                               current_pos_ned=self._current_pos_ned, cur_vel_ned=self._current_vel_ned, 
                               gyro_ned=gyro_ned, accel_ned=accel_ned, quat_ned_bodyfrd=quat_ned_bodyfrd,
-                              est_tar_pos_ned=estimated_tar_pos_ned, vel_des_ned=vel_des_ned, imu_ts=imu_ts, dt=step_dt, current_ts=current_ts, counter=counter)
+                              est_tar_pos_ned=estimated_tar_pos_ned, vel_des_ned=vel_des_ned, imu_ts=imu_ts, dt=step_dt, current_ts=current_ts, counter=counter, 
+                              obs_tensor=obs_tensor, modeID=currentData.custom_mode_id, timestamp=currentData.timestamp)
         
         return command, rpyRate_cmd, quat_ned_desbodyfrd
        
@@ -218,20 +227,24 @@ class Control():
     def log_control_data(self, command, rpy_rate_cmd, quat_ned_desbodyfrd_cmd,Omega_desired_frd,
                               current_pos_ned, cur_vel_ned,  
                               gyro_ned, accel_ned, quat_ned_bodyfrd,
-                              imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0])):
-        self._control_logger.log({"command":command, "roll_rate_cmd":rpy_rate_cmd[0], "pitch_rate_cmd":rpy_rate_cmd[1], "yaw_rate_cmd":rpy_rate_cmd[2],
-                                  "quat_ned_desbodyfrd_cmd_x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd_y":quat_ned_desbodyfrd_cmd.y,
-                                  "quat_ned_desbodyfrd_cmd_z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd_w":quat_ned_desbodyfrd_cmd.w,
-                                  "current_pos_ned_x":current_pos_ned[0], "current_pos_ned_y":current_pos_ned[1], "current_pos_ned_z":current_pos_ned[2],
-                                  "cur_vel_ned_x":cur_vel_ned[0], "cur_vel_ned_y":cur_vel_ned[1], "cur_vel_ned_z":cur_vel_ned[2],
-                                  "gyro_ned_x":gyro_ned[0], "gyro_ned_y":gyro_ned[1], "gyro_ned_z":gyro_ned[2],
-                                  "accel_ned_x":accel_ned[0], "accel_ned_y":accel_ned[1], "accel_ned_z":accel_ned[2],
-                                  "Omega_desired_frd_x":Omega_desired_frd[0], "Omega_desired_frd_y":Omega_desired_frd[1], "Omega_desired_frd_z":Omega_desired_frd[2],
-                                  "quat_ned_bodyfrd_x":quat_ned_bodyfrd.x, "quat_ned_bodyfrd_y":quat_ned_bodyfrd.y,
-                                  "quat_ned_bodyfrd_z":quat_ned_bodyfrd.z, "quat_ned_bodyfrd_w":quat_ned_bodyfrd.w,
-                                  "est_tar_pos_ned_x":est_tar_pos_ned[0], "est_tar_pos_ned_y":est_tar_pos_ned[1], "est_tar_pos_ned_z":est_tar_pos_ned[2],
-                                  "vel_des_ned_x":vel_des_ned[0], "vel_des_ned_y":vel_des_ned[1], "vel_des_ned_z":vel_des_ned[2],
-                                  "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter})
+                              imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0]),
+                              obs_tensor=None, modeID=0, timestamp=0):
+        if obs_tensor is None:
+            obs_tensor = np.zeros(4)
+        self._control_logger.log({"comp_time":time.time(), "command[0]":command[0], "command[1]":command[1], "command[2]":command[2], "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
+                                  "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
+                                  "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
+                                  "current_pos_ned/x":current_pos_ned[0], "current_pos_ned/y":current_pos_ned[1], "current_pos_ned/z":current_pos_ned[2],
+                                  "cur_vel_ned/x":cur_vel_ned[0], "cur_vel_ned/y":cur_vel_ned[1], "cur_vel_ned/z":cur_vel_ned[2],
+                                  "gyro_ned/x":gyro_ned[0], "gyro_ned/y":gyro_ned[1], "gyro_ned/z":gyro_ned[2],
+                                  "accel_ned/x":accel_ned[0], "accel_ned/y":accel_ned[1], "accel_ned/z":accel_ned[2],
+                                  "Omega_desired_frd/x":Omega_desired_frd[0], "Omega_desired_frd/y":Omega_desired_frd[1], "Omega_desired_frd/z":Omega_desired_frd[2],
+                                  "quat_ned_bodyfrd/x":quat_ned_bodyfrd.x, "quat_ned_bodyfrd/y":quat_ned_bodyfrd.y,
+                                  "quat_ned_bodyfrd/z":quat_ned_bodyfrd.z, "quat_ned_bodyfrd/w":quat_ned_bodyfrd.w,
+                                  "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
+                                  "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
+                                  "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
+                                  "obs_tensor[0]":obs_tensor[0], "obs_tensor[1]":obs_tensor[1], "obs_tensor[2]":obs_tensor[2], "obs_tensor[3]":obs_tensor[3]})
 
 ###############################################################################################################
 ###############################################################################################################################################

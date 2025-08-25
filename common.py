@@ -283,7 +283,7 @@ class Flight_Data():
         self.current_thrust = 0                      # current thrust in percentage
         self.rpy = np.zeros(3)           # roll, pitch, yaw in radians
         self.rpy_rates = np.zeros(3)                # roll, pitch, yaw rates in radians/s
-        self.custom_mode_id = None                  # custom mode id
+        self.custom_mode_id = 1                     # custom mode id
         self.custom_mode_name = None                # custom mode name
         self.throttle = 0                           # throttle in percentage
         self.heading = 0                             # angle in from north in radians

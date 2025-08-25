@@ -24,6 +24,15 @@ import os
 #sudo nano /home/user/.local/bin/mavproxy.py
 #mavproxy.py --master=/dev/ttyACM0 --baudrate 57600
 #find / -name "mavproxy.py" 2>/dev/null
+
+SIM = os.getenv('SIM', False)
+if SIM == 'True':
+    print("SIM is True")
+    mavlinkAddress = 'udp:127.0.0.1:14540'
+else:
+    print("SIM is False")
+    mavlinkAddress = 'udp:127.0.0.1:14550'
+
 MAVLINK_QUEUE_SIZE = 200
 MAVLINK_RATE_HZ = 50
 MUTEX_TIMEOUT_SEC = 1
@@ -92,7 +101,7 @@ class Hardware_Adapter():
 
         self.flight_data = {}
         self._current_airspeed = 0
-        self._mavlink_logger = Logger("mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
+        self._mavlink_logger = Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
 
         success = self._init_mavlink()
         self._current_data = Flight_Data()
@@ -132,7 +141,7 @@ class Hardware_Adapter():
         else:
             pass
             # print(str(msg_dict))
-            # self._mavlink_logger.log(str(msg_dict))
+        self._mavlink_logger.log(str(msg_dict))
 ################################################################################################################
     def listenerToCommands(self):
         ret = zmq.select([subSock], [], [], timeout=0.001)
@@ -158,7 +167,7 @@ class Hardware_Adapter():
         elif topic == zmqTopics.topicGuidenceCmdVelBodyYawRate:     
             yawRateCmd = data['yawRateCmd']
             velCmd = self._current_data.quat_ned_bodyfrd.rotate_vec(data['velCmd'])
-            velCmd[2] = 0.0
+            # velCmd[2] = 0.0
             self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=None, yaw_rate=yawRateCmd)
             
         elif topic == zmqTopics.topicGuidenceCmdAccYaw:
@@ -309,7 +318,7 @@ class Hardware_Adapter():
 #################################################################################################################
     def _init_mavlink(self):
         try:
-            self.mavlink_connection = mavutil.mavlink_connection('udp:127.0.0.1:14540')
+            self.mavlink_connection = mavutil.mavlink_connection(mavlinkAddress)
             self.mavlink_connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
             # self.mavlink_connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
             #                                 mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
@@ -505,6 +514,7 @@ class Hardware_Adapter():
     def parse(self, msg_dict):
         success = False
 
+
         key = msg_dict['mavpackettype']
         if(key == 'TIMESYNC'):
             pass
@@ -576,10 +586,11 @@ class Hardware_Adapter():
             self._current_data.gathered['temperature'] = True
         elif(key == 'HEARTBEAT'):
             self._current_data.local_ts = time.time()
-            self._current_data.mode = msg_dict['mode_string']
-            self._current_data.custom_mode_id = msg_dict['custom_mode']
-            self._current_data.gathered['mode'] = True
-            self._current_data.gathered['custom_mode_id'] = True
+            if(msg_dict['custom_mode'] != 0):
+                self._current_data.custom_mode_id = msg_dict['custom_mode']
+                self._current_data.mode = msg_dict['mode_string']
+                self._current_data.gathered['custom_mode_id'] = True
+                self._current_data.gathered['mode'] = True
         elif(key== 'LOCAL_POSITION_NED' ):
             self._current_data.local_ts = time.time()
             self._current_data.timestamp = msg_dict['time_boot_ms']
@@ -589,10 +600,14 @@ class Hardware_Adapter():
             self._current_data.gathered['pos_ned_m'] = True
             self._current_data.gathered['vel_ned_m'] = True
                 
-                
+        if((key == 'HEARTBEAT') and (self._current_data.custom_mode_id == 0)):
+            pass 
+        elif(key == 'HEARTBEAT'):
+            pass
+
 
 if __name__ == '__main__':
-    hardware_adapter = Hardware_Adapter(log_dir="logs")
+    hardware_adapter = Hardware_Adapter(log_dir='../logs/')
     outFreq = 500
     outDT = 1/outFreq
     current_ts = time.time()
@@ -604,7 +619,8 @@ if __name__ == '__main__':
     while(1):
         if(time.time() > outTime):
             outTime = time.time()+outDT
-            sockPub.send_multipart([zmqTopics.topicMavlinkFlightData, pickle.dumps(hardware_adapter._current_data)])
+            data = pickle.dumps(hardware_adapter._current_data)
+            sockPub.send_multipart([zmqTopics.topicMavlinkFlightData, data])
         if(time.time() > printTime):
             printTime = time.time()+printDt
             print("timestamp: ", hardware_adapter._current_data.timestamp)

@@ -63,28 +63,28 @@ class VelocityPIDController:
 ###############################################################################################################
     def getCommand(self, currentBodyState, desiredBodyState, controlType=None, currentData=None):
         if controlType is None:
-            pos_control=True
-            vel_control=True
+            pos_control=np.array([True, True, True])
+            vel_control=np.array([True, True, True])
         else:
-            pos_control = controlType[0]
-            vel_control = controlType[1]
+            pos_control = np.array(controlType[0]).astype(int)
+            vel_control = np.array(controlType[1]).astype(int)
             
         (pos_ned, vel_ned, accel_ned, omega_ned, quat_ned_bodyfrd) = currentBodyState
 
         (xd, xd_dot, xd_2dot, xd_3dot, xd_4dot) = desiredBodyState[0]
         (b1d, b1d_dot, b1d_2dot) = desiredBodyState[1] 
 
-        kX = self.param.kX if (pos_control and xd is not None) else np.zeros((3,3))
-        kIX = self.param.kIX if (pos_control and xd is not None) else np.zeros((3,3))
-        kV = self.param.kV #if (vel_control and xd_dot is not None) else np.zeros((3,3))
-        kIV = self.param.kIV if (vel_control and xd_dot is not None) else np.zeros((3,3))
+        kX = self.param.kX @ np.diag(pos_control)
+        kIX = self.param.kIX @ np.diag(pos_control)
+        kV = self.param.kV @ np.diag(vel_control)
+        kIV = self.param.kIV @ np.diag(vel_control)
 
         self.update_current_time()
         self.dt = self.t - self.t_pre
 
         # Translational error functions
         
-        eX = (xd - pos_ned)     if (pos_control and xd is not None)     else np.zeros(3) # position error - eq (11)
+        eX = (xd - pos_ned) * pos_control  if (xd is not None)     else np.zeros(3) # position error - eq (11)
         eV = (xd_dot - vel_ned) #if (vel_control and xd_dot is not None) else np.zeros(3) # velocity error - eq (12)
 
         # Position integral terms
@@ -94,15 +94,15 @@ class VelocityPIDController:
             self.eIV.integrate(eV, self.dt)                 # eq (13)
             self.eIV.error = saturate(self.eIV.error, -self.param.sat_sigmaV, self.param.sat_sigmaV)
 
-        A =   kX @ eX \
-            + kV @ eV \
-            + kIX @ self.eIX.error \
-            + kIV @ self.eIV.error \
-            + xd_2dot# Velocity Command
-            
+        velocity_command =    kX @ eX \
+                            + kV @ eV \
+                            + kIX @ self.eIX.error \
+                            + kIV @ self.eIV.error \
+                            + xd_2dot# Velocity Command
+                            
 
-        self.A = A
-        return A, np.eye(3), np.zeros(3)
+        self.A = velocity_command
+        return velocity_command, np.eye(3), np.zeros(3)
 ###############################################################################################################
 
     def update_current_time(self):

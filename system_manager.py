@@ -45,6 +45,7 @@ class MISSION_TYPE(Enum):
     LISSAJOUS = 4
     TRACKER = 5
     SECTION = 6
+    SPINNING = 7
 #################################################################################################################
 GOAL_LOOP_FREQ_HZ = 50
 GPS_SEARCH_TIMEOUT_SEC = 3
@@ -66,7 +67,7 @@ class System_Manager():
         self._init_pos_lla_deg = None
         self._ai1Kestimates = None
         # vehicle_config_path = self._get_vehicle_config_file(self._config_dir)
-        self._input_logger = Logger("input", self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
+        self._input_logger = Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
         # vehicle_data_parser = Config_Parser(path=vehicle_config_path)
         self.dronemass = 0.55
         # if(vehicle_data_parser is None):
@@ -74,31 +75,41 @@ class System_Manager():
         self.prev_quat_ned_desbodyfrd_cmd = None
 
         self.destHeight = None
-        self.referencePoint = np.array([-20,0,-10])
         self.tar_measurement_ned = np.array([0,0,0])
         self.heading_dir_ned = np.array([0,0,0]) 
-        self.holdonHeight = None
+  
         self.holdonHeading = None
         self.holdonPos_ned = None
         self.holdonTime = None       
         self.yawDefinedDir_ned = None   
         self.homingStage = HOMING_STAGE.NONE     
 
+        self.pointIndex = 0
+        self.offboardEntry = False
         
         ##############################
         # start scenario definitions #
         ##############################
-        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION
+        factor = 1
+        self.referencePoint = np.array([0, 3*factor, 0])
+        self.pointList = np.array([[0, 3*factor*0, 0], [0, 3*factor, 0], [3*factor, -3*factor, 0], [-3*factor, 0, 0]])
+        
+        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
         
-        self.maximalVelocity = 3 # m/s (horizontal)
+        self.maximalVelocity = 1*factor # m/s (horizontal)
         self.descentVelocity = 10
-        self.originOffset_frd = np.array([10,0,0])   # target waypoint in mode 1 or center of the circle in mode 3
+        self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 10
+        self.circleRadius = 5*factor
         
-        # self._control = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
-        self._control = Control(self._config_dir, self._log_dir, controller=VelocityRLController()) 
+        if True:        
+            self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
+            # self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(maximalVelocity=self.maximalVelocity)) 
+        else:
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
+            
         # self._control = Control(self._config_dir, self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=GeometricController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=AdaptiveGeometricController(mass=self.dronemass))
@@ -135,26 +146,27 @@ class System_Manager():
 #################################################################################################################
     def _log_input_data(self,   current_ts, imu_ts,
                                 command, rpy_rate_cmd, quat_ned_desbodyfrd_cmd, step_dt, counter,
-                                destination_ned):
+                                destination_ned, current_mode):
         # print(target_received,trk_i, trk_j )
-        self._input_logger.log({"imu_ts":self._currentData.imu_ned.timestamp,
-                                "accl_ned_x": self._currentData.imu_ned.accel[0],"accl_ned_y": self._currentData.imu_ned.accel[1], "accl_ned_z": self._currentData.imu_ned.accel[2],
-                                "gyro_ned_x": self._currentData.imu_ned.gyro[0], "gyro_ned_y": self._currentData.imu_ned.gyro[1], "gyro_ned_z": self._currentData.imu_ned.gyro[2],
+        self._input_logger.log({"comp_time":time.time(), "imu_ts":self._currentData.imu_ned.timestamp,
+                                "accl_ned/x": self._currentData.imu_ned.accel[0],"accl_ned/y": self._currentData.imu_ned.accel[1], "accl_ned/z": self._currentData.imu_ned.accel[2],
+                                "gyro_ned/x": self._currentData.imu_ned.gyro[0], "gyro_ned/y": self._currentData.imu_ned.gyro[1], "gyro_ned/z": self._currentData.imu_ned.gyro[2],
                                 "pos_ned_ts": self._currentData.pos_ned_m.timestamp,
-                                "pos_ned_x": self._currentData.pos_ned_m.ned[0], "pos_ned_y": self._currentData.pos_ned_m.ned[1], "pos_ned_z": self._currentData.pos_ned_m.ned[2],
-                                "vel_ned_x": self._currentData.pos_ned_m.vel_ned[0], "vel_ned_y": self._currentData.pos_ned_m.vel_ned[1], "vel_ned_z": self._currentData.pos_ned_m.vel_ned[2],
+                                "pos_ned/x": self._currentData.pos_ned_m.ned[0], "pos_ned/y": self._currentData.pos_ned_m.ned[1], "pos_ned/z": self._currentData.pos_ned_m.ned[2],
+                                "vel_ned/x": self._currentData.pos_ned_m.vel_ned[0], "vel_ned/y": self._currentData.pos_ned_m.vel_ned[1], "vel_ned/z": self._currentData.pos_ned_m.vel_ned[2],
                                 "quat_ned_bodyfrd_ts": self._currentData.quat_ned_bodyfrd.timestamp,
-                                "quat_ned_bodyfrd_x": self._currentData.quat_ned_bodyfrd.x, "quat_ned_bodyfrd_y": self._currentData.quat_ned_bodyfrd.y,
-                                "quat_ned_bodyfrd_z": self._currentData.quat_ned_bodyfrd.z, "quat_ned_bodyfrd_w": self._currentData.quat_ned_bodyfrd.w,
+                                "quat_ned_bodyfrd/x": self._currentData.quat_ned_bodyfrd.x, "quat_ned_bodyfrd/y": self._currentData.quat_ned_bodyfrd.y,
+                                "quat_ned_bodyfrd/z": self._currentData.quat_ned_bodyfrd.z, "quat_ned_bodyfrd/w": self._currentData.quat_ned_bodyfrd.w,
                                 "lla_ts": self._currentData.raw_pos_lla_deg.timestamp,
-                                "lla_lat_deg": self._currentData.raw_pos_lla_deg.lla[0], "lla_lon_deg": self._currentData.raw_pos_lla_deg.lla[1], "lla_alt": self._currentData.raw_pos_lla_deg.lla[2],
+                                "lla/lat_deg": self._currentData.raw_pos_lla_deg.lla[0], "lla/lon_deg": self._currentData.raw_pos_lla_deg.lla[1], "lla/alt": self._currentData.raw_pos_lla_deg.lla[2],
                                 "current_ts":current_ts, "step_dt":step_dt, "imu_ts":imu_ts,
                                 "current_alt": self._currentData.relative_m, "command": command, 
-                                "rpy_rate_cmd_x": rpy_rate_cmd[0], "rpy_rate_cmd_y": rpy_rate_cmd[1], "rpy_rate_cmd_z": rpy_rate_cmd[2], 
-                                "quat_ned_desbodyfrd_cmd_x": quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd_y": quat_ned_desbodyfrd_cmd.y,
-                                "quat_ned_desbodyfrd_cmd_z": quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd_w": quat_ned_desbodyfrd_cmd.w,
-                                "destination_ned_x": destination_ned[0], "destination_ned_y": destination_ned[1], "destination_ned_z": destination_ned[2],
-                                "counter": counter})
+                                "rpy_rate_cmd/x": rpy_rate_cmd[0], "rpy_rate_cmd/y": rpy_rate_cmd[1], "rpy_rate_cmd/z": rpy_rate_cmd[2], 
+                                "quat_ned_desbodyfrd_cmd/x": quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y": quat_ned_desbodyfrd_cmd.y,
+                                "quat_ned_desbodyfrd_cmd/z": quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w": quat_ned_desbodyfrd_cmd.w,
+                                "destination_ned/x": destination_ned[0], "destination_ned/y": destination_ned[1], "destination_ned/z": destination_ned[2],
+                                "counter": counter, "current_mode": current_mode, "timestamp": self._currentData.timestamp, "local_ts":self._currentData.local_ts,
+                                "modeID":self._currentData.custom_mode_id})
                                  
 ###############################################################################################################################################
     def _get_los_ned_dir(self, track_pos_px, quat_ned_bodyfrd:Quaternion, img_size_px, camera_fov_vec, quat_bodyfrd_cam:Quaternion):
@@ -178,7 +190,6 @@ class System_Manager():
         # (not self._currentData.gathered['tracker_px']):
             print('-return-0-')
             return
-        self.holdonHeight = self._currentData.pos_ned_m.ned[2] if self.holdonHeight is None else self.holdonHeight
         self.holdonHeading = self._currentData.quat_ned_bodyfrd.rotate_vec(np.array([1, 0, 0])) if self.holdonHeading is None else self.holdonHeading
         self.holdonPos_ned = self._currentData.pos_ned_m.ned if self.holdonPos_ned is None else self.holdonPos_ned
         self.holdonTime = time.time() if self.holdonTime is None else self.holdonTime
@@ -205,9 +216,9 @@ class System_Manager():
         elif self.yawControlType == YAW_COMMAND.CAMERA_DIR:
             self.heading_dir_ned = unitVec(np.array([self.los_ned_dir[0], self.los_ned_dir[1], 0]))
             
-        missionPoint = deepcopy(self.referencePoint);   missionPoint[2] = self.holdonHeight
+        missionPoint = self.holdonPos_ned + self.referencePoint;   
         if self.missionType == MISSION_TYPE.WAYPOINT:
-            desired_trajectory = self.pos_point(missionPoint=missionPoint, missionAttitudeDirection=self.heading_dir_ned)
+            desired_trajectory = self.pos_point(missionPoint=[missionPoint], missionAttitudeDirection=self.heading_dir_ned)
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
@@ -251,13 +262,32 @@ class System_Manager():
             
         # at HIGH_ALTITUDE_FOLLOW guidance state command is derived from trajDest
         # at TERMINAL_GUIDANCE    guidance state command is derived from los_ned_dir and los_distance
-        command, rpyRate_cmd, quat_ned_desbodyfrd_cmd = self._control.get_cmd(pos_ned=self._currentData.pos_ned_m.ned, vel_ned=self._currentData.pos_ned_m.vel_ned, accel_ned=self._currentData.imu_ned.accel, 
-                                                                gyro_ned=self._currentData.imu_ned.gyro,
-                                                                 quat_ned_bodyfrd=quat_ned_bodyfrd,
-                                                                imu_ts=self._currentData.imu_ts, step_dt=current_ts-self._prev_ts, current_ts=current_ts,                                                                
-                                                                counter=counter, trajDest_ned=trajDest, controlType=controlType, 
-                                                                headingDest=(self.heading_dir_ned, np.zeros(3), np.zeros(3)),
-                                                                homingStage=self.homingStage, currentData = self._currentData)
+        command, rpyRate_cmd, quat_ned_desbodyfrd_cmd = self._controlMain.get_cmd(pos_ned=deepcopy(self._currentData.pos_ned_m.ned), 
+                                                                                  vel_ned=deepcopy(self._currentData.pos_ned_m.vel_ned), 
+                                                                                  accel_ned=deepcopy(self._currentData.imu_ned.accel), 
+                                                                                  gyro_ned=deepcopy(self._currentData.imu_ned.gyro),
+                                                                                  quat_ned_bodyfrd=deepcopy(quat_ned_bodyfrd),
+                                                                                  imu_ts=self._currentData.imu_ts, step_dt=current_ts-self._prev_ts, current_ts=current_ts,                                                                
+                                                                                  counter=counter, trajDest_ned=deepcopy(trajDest), controlType=controlType, 
+                                                                                  headingDest=(self.heading_dir_ned, np.zeros(3), np.zeros(3)),
+                                                                                  homingStage=self.homingStage, currentData = self._currentData)
+        if hasattr(self, '_controlAux'):
+            commandAux, rpyRate_cmdAux, quat_ned_desbodyfrd_cmdAux = self._controlAux.get_cmd(pos_ned=deepcopy(self._currentData.pos_ned_m.ned), 
+                                                                                  vel_ned=deepcopy(self._currentData.pos_ned_m.vel_ned), 
+                                                                                  accel_ned=deepcopy(self._currentData.imu_ned.accel), 
+                                                                                  gyro_ned=deepcopy(self._currentData.imu_ned.gyro),
+                                                                                  quat_ned_bodyfrd=deepcopy(quat_ned_bodyfrd),
+                                                                                  imu_ts=self._currentData.imu_ts, step_dt=current_ts-self._prev_ts, current_ts=current_ts,                                                                
+                                                                                  counter=counter, trajDest_ned=trajDest, controlType=controlType, 
+                                                                                  headingDest=(self.heading_dir_ned, np.zeros(3), np.zeros(3)),
+                                                                                  homingStage=self.homingStage, currentData = deepcopy(self._currentData))  
+            commandBody = commandAux
+            if self._controlMain.controlnode.controllerType == "VelocityRL":
+                commandBody = quat_ned_bodyfrd.inv().rotate_vec(commandAux)   # suppose that the main controller command is in a body frame
+                
+            command[2] = commandBody[2]
+            
+        
         rollpitchlimit = np.deg2rad(20)
         rpy=quat_ned_desbodyfrd_cmd.to_euler().rpy
         rpy[0] = np.clip(rpy[0], -rollpitchlimit, rollpitchlimit)
@@ -275,14 +305,14 @@ class System_Manager():
             heading_dir_ned = self.heading_dir_ned 
             yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
         
-        if self._control.controlnode.controllerType == "VelocityPID":
+        if self._controlMain.controlnode.controllerType == "VelocityPID":
             msg = { 'ts': time.time(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNedYaw, pickle.dumps(msg)])
-        elif self._control.controlnode.controllerType == "VelocityRL":
+        elif self._controlMain.controlnode.controllerType == "VelocityRL":
             command_ned = command
-            msg = { 'ts': time.time(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2] }
+            msg = { 'ts': time.time(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2]*0 }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelBodyYawRate, pickle.dumps(msg)])
-        elif self._control.controlnode.controllerType == "AccelerationPID":
+        elif self._controlMain.controlnode.controllerType == "AccelerationPID":
             msg = { 'ts': time.time(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAccYaw, pickle.dumps(msg)])
         else:
@@ -313,7 +343,7 @@ class System_Manager():
         if log_data:
             self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
                                 command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
-                                counter=counter, destination_ned=trajDest_pos_ned)
+                                counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
         send_start = time.time()
             
         # self._hardware_adapter.send_command(quat_cmd=quat_ned_desbodyfrd_cmd, rpy_rate=rpyRate_cmd, thrust=command)
@@ -331,7 +361,7 @@ class System_Manager():
         return Quaternion.from_matrix(mat=mat_cam_bodyfrd.T) 
 
 #################################################################################################################
-    def horz_circle(self, center=np.array([0,0,0]), radius=10, missionAttitudeDirection=None, Vel=4):
+    def horz_circle(self, center=np.array([0,0,0]), radius=3, missionAttitudeDirection=None, Vel=1):
         if missionAttitudeDirection is None:
             missionAttitudeDirection = np.array([-1, 0, 0])
         t=time.time()-self._overall_start
@@ -348,7 +378,7 @@ class System_Manager():
 
         a = 2*pi*w  #.1
         b = 2*pi*w  #.2
-        c = 2*pi*w*2  #.2
+        c = 0*2*pi*w*2  #.2
 
         # % t = linspace(0, 2*pi, 2*pi*100+1);
         # % x = A * sin(a * t + d);
@@ -357,7 +387,7 @@ class System_Manager():
         # % plot3(x, y, z);
 
         xd =      np.array([A *         sin(a * t + d), B *         cos(b * t), C * cos(c * t)])+center
-        x_dot =  np.array([A * a *     cos(a * t + d), B * b *    -sin(b * t), C * c * -sin(c * t)])
+        x_dot =  np.array([A * a *      cos(a * t + d), B * b *    -sin(b * t), C * c * -sin(c * t)])
         x_2dot =  np.array([A * a**2 * -sin(a * t + d), B * b**2 * -cos(b * t), C * c**2 * -cos(c * t)])
         x_3dot =  np.array([A * a**3 * -cos(a * t + d), B * b**3 *  sin(b * t), C * c**3 * sin(c * t)])
         x_4dot =  np.array([A * a**4 *  sin(a * t + d), B * b**4 *  cos(b * t), C * c**4 * cos(c * t)])
@@ -369,19 +399,24 @@ class System_Manager():
         # b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
         # b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
 
-        pos_control = True
-        vel_control = False
+        pos_control = [False, False, True]
+        vel_control = [True, True, False]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (xd, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 ############################################################################################################################
 
-    def pos_point(self, missionPoint=np.array([0, 0, -30]), missionAttitudeDirection=None):
+    def pos_point(self, missionPoint=[np.array([0, 0, -30])], missionAttitudeDirection=None):
         if missionAttitudeDirection is None:
             missionAttitudeDirection = np.array([-1, 0, 0])
         
         t=time.time()-self._overall_start
-        
-        x = missionPoint
+        x = missionPoint[0]
+        if len(missionPoint) > 1:
+            T = 10
+            w = 2 * pi / T
+            state = sin(w*t)
+            x = missionPoint[0] + np.sign(state) * (missionPoint[1] - missionPoint[0])
+
         x_dot = np.array([0,0,0])
         x_2dot = np.array([0,0,0])
         x_3dot = np.array([0,0,0])
@@ -391,8 +426,8 @@ class System_Manager():
         b1_dot = np.array([0, 0, 0])
         b1_2dot = np.array([0, 0, 0])
         
-        pos_control = True
-        vel_control = False
+        pos_control = [True, True, True]
+        vel_control = [False, False, False]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 ################################################################################################################
@@ -413,8 +448,8 @@ class System_Manager():
         b1_dot = np.array([0, 0, 0])
         b1_2dot = np.array([0, 0, 0])
         
-        pos_control = False
-        vel_control = True
+        pos_control = [False, False, False]
+        vel_control = [True, True, True]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 ################################################################################################################
@@ -444,8 +479,8 @@ class System_Manager():
         b1_dot = np.array([0, 0, 0])
         b1_2dot = np.array([0, 0, 0])
         
-        pos_control = True
-        vel_control = t*speed < deltaDistance
+        pos_control = [True, True, True]
+        vel_control = [t*speed < deltaDistance, t*speed < deltaDistance, t*speed < deltaDistance]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control), finished
 ##############################################################################################################
@@ -489,8 +524,8 @@ class System_Manager():
         # self.b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
         # self.b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
 
-        pos_control = False
-        vel_control = True
+        pos_control = [False, False, False]
+        vel_control = [True, True, True]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 ###############################################################################################################
@@ -520,8 +555,8 @@ class System_Manager():
         w = 2 * pi / 10  # attitude rotation frequency
         (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot) = lissajous_func(t, A=A, B=B, C=C, a=a, b=b, c=c, alt=alt, w = w)
         
-        pos_control = False
-        vel_control = True
+        pos_control = [False, False, False]
+        vel_control = [True, True, True]
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 #################################################################################################################
@@ -529,6 +564,7 @@ class System_Manager():
         subsSock2 = zmqWrapper.subscribe( topics=[ zmqTopics.topicMavlinkFlightData ], port=zmqTopics.topicMavlinkPort )
 
         socks = zmq.select([subsSock2], [], [], 0.001)[0]
+        
         while True:
             if len(socks) > 0:
                 socket = socks[0]
@@ -542,30 +578,35 @@ class System_Manager():
                         self._currentData.custom_mode_id == 196608  or \
                         self._currentData.custom_mode_id == 131072 or \
                         self._currentData.custom_mode_id == 65535 or \
-                        self._currentData.custom_mode_id ==84148224:  # HOLD ON state or POSITION state
+                        self._currentData.custom_mode_id == 84148224:  # HOLD ON state or POSITION state
                         
-                        self.holdonHeight = self._currentData.pos_ned_m.ned[2]
                         self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
                         self.holdonHeading = self.yawDefinedDir_ned
                         self.holdonPos_ned = self._currentData.pos_ned_m.ned
                         self.holdonTime = time.time()
                         
                         if self._currentData.throttle>5:
-                            if self._control.controlnode.controllerType == "VelocityRL":
-                                self._control.MaximalThrust = 1
+                            if self._controlMain.controlnode.controllerType == "VelocityRL":
+                                self._controlMain.MaximalThrust = 1
                             else:
-                                self._control.MaximalThrust = self._control.controlnode.param.mass*9.81/self._currentData.throttle*100
-                                self._control.controlnode.resetIntegralErrorTerms()
+                                self._controlMain.MaximalThrust = self._controlMain.controlnode.param.mass*9.81/self._currentData.throttle*100
+                                self._controlMain.controlnode.resetIntegralErrorTerms()
                         
                         self.homingStage = HOMING_STAGE.SECTION if self.missionType == MISSION_TYPE.TRACKER else HOMING_STAGE.NONE
                         self._currentData.offboardMode = False
+                        self.offboardEntry = True
                         
                     elif self._currentData.custom_mode_id == 393216:  # OFFBOARD state
                         self._currentData.offboardMode = True
-                        if self._control.controlnode.controllerType != "VelocityRL":
-                            if not self._control.controlnode.use_integralTerm:
-                                self._control.controlnode.resetIntegralErrorTerms()
-                                self._control.controlnode.use_integralTerm = True
+                        if self._controlMain.controlnode.controllerType != "VelocityRL":
+                            if not self._controlMain.controlnode.use_integralTerm:
+                                self._controlMain.controlnode.resetIntegralErrorTerms()
+                                self._controlMain.controlnode.use_integralTerm = True
+
+                        if self.offboardEntry and self.missionType == MISSION_TYPE.WAYPOINT:
+                            self.pointIndex = (self.pointIndex + 1) % len(self.pointList)
+                            self.referencePoint = self.pointList[self.pointIndex]
+                            self.offboardEntry = False
                     break
                 
             socks = zmq.select([subsSock2], [], [], 0.001)[0]
