@@ -91,8 +91,8 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([0, 3*factor, 0])
-        self.pointList = np.array([[0, 3*factor*0, 0], [0, 3*factor, 0], [3*factor, -3*factor, 0], [-3*factor, 0, 0]])
+        self.referencePoint = np.array([0, 10*factor,  0])
+        # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
@@ -333,7 +333,8 @@ class System_Manager():
             print('timestamp: ', self._currentData.timestamp, '--->referencePoint: %.3f %.3f %.3f, pos_ned:  %.3f %.3f %.3f '%( 
                 self.referencePoint[0], self.referencePoint[1], self.referencePoint[2],
                 pos_ned[0], pos_ned[1], pos_ned[2])+str(self.homingStage)+                
-                "   Command:" + str(command)+" yawRateCmd:"+str(yawCmd)+" deltaPos_frd:"+str(deltaPos_frd))#+"   delta_frd"+str(deltaPos_frd))
+                " Command: + %.3f %.3f %.3f"%(command[0], command[1], command[2])+" yawRateCmd: %.3f"%(yawCmd)+
+                " deltaPos_frd: %.3f %.3f %.3f"%(deltaPos_frd[0], deltaPos_frd[1], deltaPos_frd[2]))#+"   delta_frd"+str(deltaPos_frd))
             
             try:
                 print('<<--', np.linalg.norm(missionPoint[0:2]-pos_ned[0:2])+" timestamp:"+str(self._currentData.timestamp))
@@ -603,7 +604,8 @@ class System_Manager():
                                 self._controlMain.controlnode.resetIntegralErrorTerms()
                                 self._controlMain.controlnode.use_integralTerm = True
 
-                        if self.offboardEntry and self.missionType == MISSION_TYPE.WAYPOINT:
+                        if self.offboardEntry and self.missionType == MISSION_TYPE.WAYPOINT and \
+                           hasattr(self, 'pointList'):
                             self.pointIndex = (self.pointIndex + 1) % len(self.pointList)
                             self.referencePoint = self.pointList[self.pointIndex]
                             self.offboardEntry = False

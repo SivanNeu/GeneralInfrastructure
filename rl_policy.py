@@ -8,12 +8,11 @@ class RLPolicy(nn.Module):
     def __init__(self):
         super().__init__()
         # 1) obs normalizer parameters (identity for 3-dim obs)
-        obsdim = 4
-        self.obs_mean = nn.Parameter(torch.zeros(obsdim), requires_grad=False)
-        self.obs_var  = nn.Parameter(torch.ones(obsdim), requires_grad=False)
-        # 2) encoder MLP: 3 → 64 → 64 → 64
+        self.obs_mean = nn.Parameter(torch.zeros(8), requires_grad=False)
+        self.obs_var  = nn.Parameter(torch.ones(8), requires_grad=False)
+        # 2) encoder MLP: 8 → 64 → 64 → 64
         self.encoder = nn.Sequential(
-            nn.Linear(obsdim, 64),
+            nn.Linear(8, 64),
             nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
