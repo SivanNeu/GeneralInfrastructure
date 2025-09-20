@@ -36,16 +36,15 @@ class VelocityRLController:
 
         # policy network setup
         
-        self.policy = SF_Enjoy_main().enjoy
+        sf_enjoy, self.rnn_states = SF_Enjoy_main()
+        self.policy = sf_enjoy.enjoy
         
-        # initial GRU hidden state
-        self.rnn_states = torch.zeros(1, 1, 512)[0]
         
 ###############################################################################################################
     def getCommand(self, currentBodyState, desiredBodyState, controlType=None, currentData=None):
                
         ## get raw position data
-        self.pos_self, _, _, _, _ = currentBodyState
+        self.pos_self, _, _, _, quat_ned_bodyfrd = currentBodyState
         self.pos_target, _, _, _, _ = desiredBodyState[0]
         if currentData is not None:
             self.yaw=currentData.rpy[2]
@@ -53,9 +52,13 @@ class VelocityRLController:
         ## transform into observation space data
         delta = self.pos_target[0:2] - self.pos_self[0:2]
         self.target_distance = np.linalg.norm(delta)
-        if self.target_distance > 20.0: self.target_distance = 20.0
-        self.target_angle = atan2(delta[1],delta[0])
-        self.target_angle = (self.target_angle - self.yaw + pi) % (2*pi) - pi
+        delta_body = quat_ned_bodyfrd.inv().rotate_vec(self.pos_target - self.pos_self)
+        if np.linalg.norm(delta_body) < 1e-6:
+            theta = 0.0
+        else:
+            theta = np.arctan2(delta_body[0], delta_body[1])
+            
+        self.target_angle = (theta + np.pi) % (2*np.pi) - np.pi
         self.target_distance_dot = (self.last_distance - self.target_distance)/self.dt
         self.theta_dot = (self.last_theta - self.target_angle) / self.dt
         self.last_distance = self.target_distance
@@ -65,10 +68,7 @@ class VelocityRLController:
                         self.target_angle, 
                         self.target_distance_dot, 
                         self.theta_dot, 
-                        self.ringV[0,self.ringIndex],
-                        self.ringV[1,self.ringIndex],
-                        self.ringAverage[0], 
-                        self.ringAverage[1]],dtype=np.float32)
+                        ],dtype=np.float32)
         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
         
         ## execute policy inference

@@ -91,13 +91,13 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([0, 10*factor,  0])
+        self.referencePoint = np.array([ 10, 10*factor,  0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
         
-        self.maximalVelocity = 1*factor # m/s (horizontal)
+        self.maximalVelocity = 10*factor # m/s (horizontal)
         self.descentVelocity = 10
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
@@ -625,6 +625,6 @@ if __name__=='__main__':
     sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
     while True:
         # time.sleep(0.0001)
-        time.sleep(0.01)
+        time.sleep(0.1)
         sysMgr.sys_manager_step()
 
