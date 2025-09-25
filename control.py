@@ -145,9 +145,9 @@ class Control():
         controResults = self.controlnode.getCommand(currentBodyState, desiredBodyState, controlType, currentData)
         f_total, R_desired, Omega_desired_frd  = controResults[0], controResults[1], controResults[2]
         if len(controResults) > 3:
-            obs_tensor = controResults[3]
+            obs = controResults[3]
         else:
-            obs_tensor = None
+            obs = None
         # f_total_ref, R_desired_ref, Omega_desired_frd_ref = self.controlnode_ref.getCommand(currentBodyState, desiredBodyState, controlType)
 
         if self.controlnode.controllerType == "VelocityPID":
@@ -184,7 +184,7 @@ class Control():
                               current_pos_ned=self._current_pos_ned, cur_vel_ned=self._current_vel_ned, 
                               gyro_ned=gyro_ned, accel_ned=accel_ned, quat_ned_bodyfrd=quat_ned_bodyfrd,
                               est_tar_pos_ned=estimated_tar_pos_ned, vel_des_ned=vel_des_ned, imu_ts=imu_ts, dt=step_dt, current_ts=current_ts, counter=counter, 
-                              obs_tensor=obs_tensor, modeID=currentData.custom_mode_id, timestamp=currentData.timestamp)
+                              obs=obs, modeID=currentData.custom_mode_id, timestamp=currentData.timestamp)
         
         return command, rpyRate_cmd, quat_ned_desbodyfrd
        
@@ -228,9 +228,10 @@ class Control():
                               current_pos_ned, cur_vel_ned,  
                               gyro_ned, accel_ned, quat_ned_bodyfrd,
                               imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0]),
-                              obs_tensor=None, modeID=0, timestamp=0):
-        if obs_tensor is None:
-            obs_tensor = np.zeros(4)
+                              obs=None, modeID=0, timestamp=0):
+        if obs is None:
+            obs = [np.zeros(4)]
+        obs = obs[0]
         self._control_logger.log({"comp_time":time.time(), "command[0]":command[0], "command[1]":command[1], "command[2]":command[2], "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
                                   "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
                                   "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
@@ -244,7 +245,7 @@ class Control():
                                   "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
                                   "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
                                   "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
-                                  "obs_tensor[0]":obs_tensor[0], "obs_tensor[1]":obs_tensor[1], "obs_tensor[2]":obs_tensor[2], "obs_tensor[3]":obs_tensor[3]})
+                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2], "obs[3]":obs[3]})
 
 ###############################################################################################################
 ###############################################################################################################################################

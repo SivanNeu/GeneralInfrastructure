@@ -91,17 +91,17 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ 10, 10*factor,  0])
+        self.referencePoint = np.array([ 10, 0, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
         
         self.maximalVelocity = 10*factor # m/s (horizontal)
         self.descentVelocity = 10
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 5*factor
+        self.circleRadius = 15*factor
         
         if True:        
             self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
@@ -233,7 +233,7 @@ class System_Manager():
             self.heading_dir_ned = desired_trajectory[1][0]
             
         elif self.missionType == MISSION_TYPE.CIRCLE: 
-            desired_trajectory = self.horz_circle(center=missionPoint, radius=self.circleRadius, Vel=self.maximalVelocity-1, missionAttitudeDirection=self.heading_dir_ned)   # bui
+            desired_trajectory = self.horz_circle(center=missionPoint, radius=self.circleRadius, Vel=3, missionAttitudeDirection=self.heading_dir_ned)   # bui
             # desired_trajectory = self.horz_circle(center = np.array([-10,20,0]), radius=10)    # corner ok, bui fades away
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
