@@ -65,7 +65,6 @@ class VelocityRLController:
         self.last_theta = self.target_angle
 
         obs = np.array([[self.target_distance, 
-                        0, 
                         np.sin(self.target_angle), 
                         np.cos(self.target_angle),  
                         ]],dtype=np.float32)

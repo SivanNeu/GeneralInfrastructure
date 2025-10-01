@@ -72,13 +72,11 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
             dtype=np.float32                                                                    
         )
         obs_low  = np.array([0.0,                 # r
-                             -self.max_speed,     # r_dot
                              -1.0,              # sin(theta)
                              -1.0,              # cos(theta)
                             ],    # V_right average
                             dtype=np.float32)
         obs_high = np.array([self.max_range,  
-                             self.max_speed, 
                              1.0, 
                              1.0
                              ], dtype=np.float32)
@@ -94,7 +92,7 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        obs = np.array([1, 0.0, sin(0), cos(0)], dtype=np.float32)
+        obs = np.array([1, sin(0), cos(0)], dtype=np.float32)
         return obs, {}
 
     def step(self, action):

@@ -245,7 +245,7 @@ class Control():
                                   "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
                                   "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
                                   "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
-                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2], "obs[3]":obs[3]})
+                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2]})
 
 ###############################################################################################################
 ###############################################################################################################################################

@@ -94,7 +94,7 @@ class System_Manager():
         self.referencePoint = np.array([ 10, 0, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
         
         self.maximalVelocity = 10*factor # m/s (horizontal)
