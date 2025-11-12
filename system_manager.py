@@ -67,7 +67,7 @@ class System_Manager():
         self._init_pos_lla_deg = None
         self._ai1Kestimates = None
         # vehicle_config_path = self._get_vehicle_config_file(self._config_dir)
-        self._input_logger = Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
+        self._input_logger = None #Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
         # vehicle_data_parser = Config_Parser(path=vehicle_config_path)
         self.dronemass = 0.55
         # if(vehicle_data_parser is None):
@@ -76,7 +76,7 @@ class System_Manager():
 
         self.destHeight = None
         self.tar_measurement_ned = np.array([0,0,0])
-        self.heading_dir_ned = np.array([0,0,0]) 
+        self.heading_dir_ned = np.array([0,1,0]) 
   
         self.holdonHeading = None
         self.holdonPos_ned = None
@@ -91,11 +91,12 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ 10, 0, 0])
+        self.referencePoint = np.array([ -1, 0, 0])
+        self.desiredHeadingDir_ned = np.array([0, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
-        self.yawControlType = YAW_COMMAND.HOLD_CUR_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR
+        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
         self.maximalVelocity = 10*factor # m/s (horizontal)
         self.descentVelocity = 10
@@ -215,6 +216,8 @@ class System_Manager():
                 self.heading_dir_ned[2] = 0; self.heading_dir_ned = unitVec(self.heading_dir_ned)
         elif self.yawControlType == YAW_COMMAND.CAMERA_DIR:
             self.heading_dir_ned = unitVec(np.array([self.los_ned_dir[0], self.los_ned_dir[1], 0]))
+        elif self.yawControlType == YAW_COMMAND.DEFINED_DIR:
+            self.heading_dir_ned = deepcopy(self.desiredHeadingDir_ned)
             
         missionPoint = self.holdonPos_ned + self.referencePoint;   
         if self.missionType == MISSION_TYPE.WAYPOINT:
@@ -270,7 +273,8 @@ class System_Manager():
                                                                                   imu_ts=self._currentData.imu_ts, step_dt=current_ts-self._prev_ts, current_ts=current_ts,                                                                
                                                                                   counter=counter, trajDest_ned=deepcopy(trajDest), controlType=controlType, 
                                                                                   headingDest=(self.heading_dir_ned, np.zeros(3), np.zeros(3)),
-                                                                                  homingStage=self.homingStage, currentData = self._currentData)
+                                                                                  homingStage=self.homingStage, currentData = self._currentData,
+                                                                                  log_data=self._input_logger is not None)
         if hasattr(self, '_controlAux'):
             commandAux, rpyRate_cmdAux, quat_ned_desbodyfrd_cmdAux = self._controlAux.get_cmd(pos_ned=deepcopy(self._currentData.pos_ned_m.ned), 
                                                                                   vel_ned=deepcopy(self._currentData.pos_ned_m.vel_ned), 
@@ -280,7 +284,8 @@ class System_Manager():
                                                                                   imu_ts=self._currentData.imu_ts, step_dt=current_ts-self._prev_ts, current_ts=current_ts,                                                                
                                                                                   counter=counter, trajDest_ned=trajDest, controlType=controlType, 
                                                                                   headingDest=(self.heading_dir_ned, np.zeros(3), np.zeros(3)),
-                                                                                  homingStage=self.homingStage, currentData = deepcopy(self._currentData))  
+                                                                                  homingStage=self.homingStage, currentData = deepcopy(self._currentData),
+                                                                                  log_data=self._input_logger is not None)
             commandBody = commandAux
             if self._controlMain.controlnode.controllerType == "VelocityRL":
                 commandBody = quat_ned_bodyfrd.inv().rotate_vec(commandAux)   # suppose that the main controller command is in a body frame
@@ -341,7 +346,7 @@ class System_Manager():
             except:
                 pass
         
-        if log_data:
+        if log_data and self._input_logger is not None:
             self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
                                 command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
                                 counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
@@ -573,6 +578,7 @@ class System_Manager():
                 topic = ret[0]
                 data = pickle.loads(ret[1])
                 if topic == zmqTopics.topicMavlinkFlightData:  
+ 
                     self._currentData = data# mavlink LOCAL_POSITION_NED      # Flight controller time                  
                     #if (self._currentData.custom_mode_id == 50593792) or \ # and self._currentData.groundspeed<0.5) or  \
                     if self._currentData.custom_mode_id == 50593792 or \
@@ -581,6 +587,7 @@ class System_Manager():
                         self._currentData.custom_mode_id == 65535 or \
                         self._currentData.custom_mode_id == 84148224:  # HOLD ON state or POSITION state
                         
+                        self._input_logger = None
                         self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
                         self.holdonHeading = self.yawDefinedDir_ned
                         self.holdonPos_ned = self._currentData.pos_ned_m.ned
@@ -598,6 +605,9 @@ class System_Manager():
                         self.offboardEntry = True
                         
                     elif self._currentData.custom_mode_id == 393216:  # OFFBOARD state
+                        if self._input_logger is None:
+                            self._input_logger = Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
+
                         self._currentData.offboardMode = True
                         if self._controlMain.controlnode.controllerType != "VelocityRL":
                             if not self._controlMain.controlnode.use_integralTerm:
@@ -621,10 +631,15 @@ class System_Manager():
 ############################################################################################################################
 ############################################################################################################################
 ############################################################################################################################
-if __name__=='__main__':
+def main():
     sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
     while True:
         # time.sleep(0.0001)
-        time.sleep(0.1)
+        time.sleep(0.01)
+        startTime = time.time()
         sysMgr.sys_manager_step()
+        endTime = time.time()
+        # print("Computation Time",endTime-startTime)
 
+if __name__=='__main__':
+    main()

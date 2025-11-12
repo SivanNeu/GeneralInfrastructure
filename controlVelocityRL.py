@@ -1,7 +1,7 @@
 import time
 import numpy as np
 import torch
-from rl_policy import RLPolicy
+from rl_policyClean import RLPolicyClean
 from copy import deepcopy
 
 from SF_Enjoy import SF_Enjoy_main
@@ -19,8 +19,9 @@ class VelocityRLController:
 
         # state space parameters
         self.pos_self = [0.0,0.0,0.0] # NED
-        self.yaw = 0.0                # relative to North
+
         self.pos_target = [0.0,0.0,0.0]
+        self.heading_target = [0.0,0.0,0.0]
         self.target_distance = 0.0    # relative to self
         self.target_distance_dot = 0.0
         self.last_distance = 0.0
@@ -36,16 +37,25 @@ class VelocityRLController:
 
         # policy network setup
         
-        sf_enjoy, self.rnn_states = SF_Enjoy_main()
-        self.policy = sf_enjoy.enjoy
+        # sf_enjoy = SF_Enjoy_main()
+        # self.sf_policy = sf_enjoy.enjoy
         
+        self.rl_policyVfVr = RLPolicyClean.load_from_checkpoint(path='./train_dir/relu_r/checkpoint_p0/best_000007954_8144896_reward_121.191.pth')
+        self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path='./train_dir/relu_yaw/checkpoint_p0/best_000009767_10001408_reward_7754.513.pth')
         
 ###############################################################################################################
     def getCommand(self, currentBodyState, desiredBodyState, controlType=None, currentData=None):
                
         ## get raw position data
-        self.pos_self, _, _, _, quat_ned_bodyfrd = currentBodyState
+        self.pos_self, _, _, gyro_ned, quat_ned_bodyfrd = currentBodyState
+        gyro_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(gyro_ned)
+        
         self.pos_target, _, _, _, _ = desiredBodyState[0]
+        self.heading_target, _, _= desiredBodyState[1]; self.heading_target = self.heading_target/np.linalg.norm(self.heading_target)
+        self.heading_target_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(self.heading_target)
+        
+        heading_error = np.arctan2(self.heading_target_bodyfrd[1], self.heading_target_bodyfrd[0])
+        
         if currentData is not None:
             self.yaw=currentData.rpy[2]
         
@@ -58,33 +68,39 @@ class VelocityRLController:
         else:
             self.target_angle = np.arctan2(delta_body[0], delta_body[1])
             
-        # self.target_angle = (self.target_angle + np.pi) % (2*np.pi) - np.pi
         self.target_distance_dot = (self.last_distance - self.target_distance)/self.dt
-        self.theta_dot = (self.last_theta - self.target_angle) / self.dt
         self.last_distance = self.target_distance
         self.last_theta = self.target_angle
 
-        obs = np.array([[self.target_distance, 
-                        0, 
+        obsXY = np.array([[self.target_distance, 
                         np.sin(self.target_angle), 
                         np.cos(self.target_angle),  
                         ]],dtype=np.float32)
-        # obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+        obsHeading = np.array([[np.sin(heading_error), 
+                                np.cos(heading_error),
+                                gyro_bodyfrd[2]*0
+                                ]],dtype=np.float32)
         
         ## execute policy inference
 
-        action, rnn_states, action_mean, action_logstd = self.policy(obs, deepcopy(self.rnn_states))  #, deterministic=True
-        self.rnn_states = deepcopy(rnn_states)
-            
-        vf_,vr_,w = action_mean.squeeze(0).numpy()  # [v_r, v_θ, w_yaw]
+        # action_logits = self.sf_policy(obs)  #, deterministic=True
+
+        
+        # action_logits_sf, rnn_states_sf = self.sf_policy(obsXY)
+        rl_action_logitsClean, rl_hxsClean = self.rl_policyVfVr(obsXY)
+        rl_action_logitsOmegaYaw, rl_hxsOmegaYaw = self.rl_policyOmegaYaw(obsHeading)
+
+        action_mean = rl_action_logitsClean[0][:3]
+        action_logstd = rl_action_logitsClean[0][3:6]            
+        vf_,vr_,w = action_mean.detach().numpy()  # [v_r, v_θ, w_yaw]
         vf = np.clip(vf_,-self.max_vel,self.max_vel)
         vr = np.clip(vr_,-self.max_vel,self.max_vel)
-        w  = 0.0
+        w  = rl_action_logitsOmegaYaw.detach().numpy()[0][0]
         ## vectorize and send outputs
         vel_vector = [vf,vr,0] # in FRD
         omega_vector = [0,0,w]
         # print("velocity  "+str(vf)+" "+str(vr)+"  omega "+str(w))
-        return vel_vector, np.eye(3), omega_vector, obs
+        return vel_vector, np.eye(3), omega_vector, obsXY
 
     
 

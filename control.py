@@ -59,6 +59,7 @@ class HOMING_STAGE(Enum):
 ###############################################################################################################################################
 class Control():
     def __init__(self, config_dir, log_directory, controller, maximalVelocity=MAXIMALVELOCITY):   # image size in pixels (width, height)
+        self.log_directory = log_directory
         self.maximalVelocity = maximalVelocity
         self._start_vertical_los_deg = None
         self._noise_sim = None
@@ -89,7 +90,7 @@ class Control():
 
         self._accel_cmd_ned = None
 
-        self._control_logger = Logger("control_logs_"+controller.controllerType+"_"+time.strftime("%Y%m%d_%H%M%S"), log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
+        self._control_logger = None #Logger("control_logs_"+controller.controllerType+"_"+time.strftime("%Y%m%d_%H%M%S"), log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
         # self._control_input_logger = Logger("control_input", log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")       
        
         # self._current_error_horizontal_rad = 0
@@ -179,7 +180,13 @@ class Control():
 
         rpyRate_cmd = Omega_desired_frd
 
-        if(log_data):              
+
+        if not log_data:
+            self._control_logger = None
+        elif log_data and self._control_logger is None:
+            self._control_logger = Logger("control_logs_"+self.controlnode.controllerType+"_"+time.strftime("%Y%m%d_%H%M%S"), self.log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
+
+        if log_data and self._control_logger is not None:              
             self.log_control_data(command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd,Omega_desired_frd=Omega_desired_frd,
                               current_pos_ned=self._current_pos_ned, cur_vel_ned=self._current_vel_ned, 
                               gyro_ned=gyro_ned, accel_ned=accel_ned, quat_ned_bodyfrd=quat_ned_bodyfrd,
@@ -245,7 +252,7 @@ class Control():
                                   "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
                                   "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
                                   "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
-                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2], "obs[3]":obs[3]})
+                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2]})
 
 ###############################################################################################################
 ###############################################################################################################################################

@@ -101,7 +101,7 @@ class Hardware_Adapter():
 
         self.flight_data = {}
         self._current_airspeed = 0
-        self._mavlink_logger = Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
+        self._mavlink_logger = None #Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
 
         success = self._init_mavlink()
         self._current_data = Flight_Data()
@@ -141,7 +141,16 @@ class Hardware_Adapter():
         else:
             pass
             # print(str(msg_dict))
-        self._mavlink_logger.log(str(msg_dict))
+        
+        if self._current_data.custom_mode_id != 393216:  # OFFBOARD state
+            self._mavlink_logger = None
+        elif self._mavlink_logger is None:
+            self._mavlink_logger = Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
+        
+        if self._mavlink_logger is not None:
+            self._mavlink_logger.log(str(msg_dict))
+        else:
+            pass
 ################################################################################################################
     def listenerToCommands(self):
         ret = zmq.select([subSock], [], [], timeout=0.001)
@@ -605,8 +614,7 @@ class Hardware_Adapter():
         elif(key == 'HEARTBEAT'):
             pass
 
-
-if __name__ == '__main__':
+def main():
     hardware_adapter = Hardware_Adapter(log_dir='../logs/')
     outFreq = 500
     outDT = 1/outFreq
@@ -628,6 +636,7 @@ if __name__ == '__main__':
         hardware_adapter.listenerToCommands()
         time.sleep(.0001)
 
-    
+if __name__ == '__main__':
+    main()
 
 
