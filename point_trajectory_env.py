@@ -54,7 +54,8 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
 
         # Base parameters
         self.max_range = 20.0
-       
+        self.max_heading = np.pi
+        
         # Reward shaping
         self.theta_reward = 33.0
         self.reward_min = 0.5
@@ -71,15 +72,17 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
             high=np.array([ self.max_speed,  self.max_speed,  self.max_w ], dtype=np.float32),    
             dtype=np.float32                                                                    
         )
-        obs_low  = np.array([0.0,                 # r
-                             -1.0,              # sin(theta)
-                             -1.0,              # cos(theta)
+        obs_low  = np.array([0.0,               # r min
+                             -1.0,              # sin(theta) min
+                             -1.0,              # cos(theta) min
+                            #  -self.max_heading, # heading_error min
                             ],    # V_right average
                             dtype=np.float32)
-        obs_high = np.array([self.max_range,  
-                             1.0, 
-                             1.0
-                             ], dtype=np.float32)
+        obs_high = np.array([self.max_range,   # r max
+                             1.0,              # sin(theta) max
+                             1.0,              # cos(theta) max
+                            #  self.max_heading, # heading_error max
+                             ], dtype=np.float32)        
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
     def set_training_info(self, training_info: dict):

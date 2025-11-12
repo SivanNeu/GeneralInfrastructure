@@ -143,7 +143,9 @@ def point_trajectory_override_defaults(env, parser: argparse.ArgumentParser):
     )
 
 def parse_args(argv=None, evaluation=False):
-    argv = ['--env=point_trajectory', '--experiment=reward_shape_epsilon_0.05', '--train_dir=./train_dir', '--load_checkpoint_kind', 'best', '--eval_deterministic=True', '--video_frames=300', '--device=cpu']
+    argv = ['--env=point_trajectory', '--experiment=relu_r', '--train_dir=./train_dir', 
+            '--load_checkpoint_kind', 'best', '--eval_deterministic=True', '--video_frames=300', 
+            '--device=cpu', '--nonlinearity', 'relu']
     parser, partial_cfg = parse_sf_args(argv=argv, evaluation=evaluation)
     add_point_env_args(partial_cfg.env, parser, evaluation=evaluation)
     point_trajectory_override_defaults(partial_cfg.env, parser)
@@ -157,8 +159,8 @@ def SF_Enjoy_main():
     cfg = parse_args(evaluation=True)
     # satisfy SF enjoy argument requirements
     cfg.cli_args = vars(cfg)
-    hxs = torch.zeros(1, 1, 512)[0]
-    return SF_Enjoy(cfg), hxs
+
+    return SF_Enjoy(cfg)
 
 
 class SF_Enjoy:
@@ -196,16 +198,18 @@ class SF_Enjoy:
         checkpoints = Learner.get_checkpoints(Learner.checkpoint_dir(cfg, policy_id), f"{name_prefix}_*")
         checkpoint_dict = Learner.load_checkpoint(checkpoints, device)
         self.actor_critic.load_state_dict(checkpoint_dict["model"])
+        
+        self.hxs = torch.zeros(1, 1, 512)
 
     def max_frames_reached(self,frames):
         return self.cfg.max_num_frames is not None and frames > self.cfg.max_num_frames
     
-    def enjoy(self, obs, rnn_states) -> Tuple[StatusCode, float]:
+    def enjoy(self, obs) -> Tuple[StatusCode, float]:
  
         with torch.no_grad():
             normalized_obs = prepare_and_normalize_obs(self.actor_critic, {"obs": obs})
 
-            policy_outputs = self.actor_critic(normalized_obs, rnn_states, action_mask=None)
+            policy_outputs = self.actor_critic(normalized_obs, self.hxs[0])
 
             # sample actions from the distribution by default
             actions = policy_outputs["actions"]
@@ -219,7 +223,7 @@ class SF_Enjoy:
                 actions = unsqueeze_tensor(actions, dim=-1)
             actions = preprocess_actions(self.env_info, actions)
 
-            rnn_states_out = policy_outputs["new_rnn_states"]
-            action_mean = policy_outputs["action_logits"][0][0:3]
-            action_logstd = policy_outputs["action_logits"][0][3:6]
-        return actions, rnn_states_out, action_mean, action_logstd
+            self.hxs = [policy_outputs["new_rnn_states"]]
+            # action_mean = policy_outputs["action_logits"][0][0:3]
+            # action_logstd = policy_outputs["action_logits"][0][3:6]
+        return policy_outputs["action_logits"], self.hxs[0]
