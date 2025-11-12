@@ -151,7 +151,7 @@ class Control():
             obs = None
         # f_total_ref, R_desired_ref, Omega_desired_frd_ref = self.controlnode_ref.getCommand(currentBodyState, desiredBodyState, controlType)
 
-        if self.controlnode.controllerType == "VelocityPID":
+        if self.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
             velCmdDir = np.zeros(3)
             if np.linalg.norm(f_total) > 0:
                 velCmdDir = f_total/np.linalg.norm(f_total)
@@ -160,13 +160,13 @@ class Control():
             velCmdAbsClipped = np.clip(velCmdAbs, 0, self.maximalVelocity)
             velCmd = velCmdDir * velCmdAbsClipped
             command = velCmd
-        elif self.controlnode.controllerType == "VelocityRL":
+        elif self.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             velCmd = f_total
             command = velCmd
             rpyRate_cmd = Omega_desired_frd
             R_desired = quat_ned_bodyfrd.to_rotation_matrix()
             
-        elif self.controlnode.controllerType == "AccelerationPID":
+        elif self.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
             accCmdDir = f_total/np.linalg.norm(f_total)
             accCmdAbs = np.linalg.norm(f_total)
             accCmdAbsClipped = np.clip(accCmdAbs, 0, MAXIMALACCELERATION)
@@ -184,7 +184,7 @@ class Control():
         if not log_data:
             self._control_logger = None
         elif log_data and self._control_logger is None:
-            self._control_logger = Logger("control_logs_"+self.controlnode.controllerType+"_"+time.strftime("%Y%m%d_%H%M%S"), self.log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
+            self._control_logger = Logger("control_logs_"+self.controlnode.controllerName+"_"+time.strftime("%Y%m%d_%H%M%S"), self.log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
 
         if log_data and self._control_logger is not None:              
             self.log_control_data(command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd,Omega_desired_frd=Omega_desired_frd,

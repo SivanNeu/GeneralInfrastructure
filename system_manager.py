@@ -92,7 +92,7 @@ class System_Manager():
         ##############################
         factor = 1
         self.referencePoint = np.array([ -1, 0, 0])
-        self.desiredHeadingDir_ned = np.array([0, 1, 0])
+        self.desiredHeadingDir_ned = np.array([0, 1, 0]) 
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
@@ -103,12 +103,13 @@ class System_Manager():
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
         self.circleRadius = 15*factor
+        self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         
-        if True:        
+        if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
             self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
             # self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
-            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(maximalVelocity=self.maximalVelocity)) 
-        else:
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity)) 
+        elif self.controllerType == CONTROLLER_TYPE.VELOCITYPID:
             self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
             
         # self._control = Control(self._config_dir, self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
@@ -287,7 +288,7 @@ class System_Manager():
                                                                                   homingStage=self.homingStage, currentData = deepcopy(self._currentData),
                                                                                   log_data=self._input_logger is not None)
             commandBody = commandAux
-            if self._controlMain.controlnode.controllerType == "VelocityRL":
+            if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
                 commandBody = quat_ned_bodyfrd.inv().rotate_vec(commandAux)   # suppose that the main controller command is in a body frame
                 
             command[2] = commandBody[2]
@@ -310,14 +311,14 @@ class System_Manager():
             heading_dir_ned = self.heading_dir_ned 
             yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
         
-        if self._controlMain.controlnode.controllerType == "VelocityPID":
+        if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
             msg = { 'ts': time.time(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNedYaw, pickle.dumps(msg)])
-        elif self._controlMain.controlnode.controllerType == "VelocityRL":
+        elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
             msg = { 'ts': time.time(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2]*0 }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelBodyYawRate, pickle.dumps(msg)])
-        elif self._controlMain.controlnode.controllerType == "AccelerationPID":
+        elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
             msg = { 'ts': time.time(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAccYaw, pickle.dumps(msg)])
         else:
@@ -594,7 +595,7 @@ class System_Manager():
                         self.holdonTime = time.time()
                         
                         if self._currentData.throttle>5:
-                            if self._controlMain.controlnode.controllerType == "VelocityRL":
+                            if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
                                 self._controlMain.MaximalThrust = 1
                             else:
                                 self._controlMain.MaximalThrust = self._controlMain.controlnode.param.mass*9.81/self._currentData.throttle*100
@@ -609,7 +610,7 @@ class System_Manager():
                             self._input_logger = Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
 
                         self._currentData.offboardMode = True
-                        if self._controlMain.controlnode.controllerType != "VelocityRL":
+                        if self._controlMain.controlnode.controllerType != CONTROLLER_TYPE.VELOCITYRL:
                             if not self._controlMain.controlnode.use_integralTerm:
                                 self._controlMain.controlnode.resetIntegralErrorTerms()
                                 self._controlMain.controlnode.use_integralTerm = True

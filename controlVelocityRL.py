@@ -1,6 +1,7 @@
 import time
 import numpy as np
 import torch
+from common import CONTROLLER_TYPE
 from rl_policyClean import RLPolicyClean
 from copy import deepcopy
 
@@ -8,13 +9,19 @@ from SF_Enjoy import SF_Enjoy_main
 
 from math import sin, cos, pi, sqrt, atan2
 
-        
+###############################################################################################################
+class VelocityRLControllerParameters:
+    def __init__(self, mass=0.5):
+        self.mass = mass  # Mass of the rover (kg)
+   
 ###############################################################################################################
 class VelocityRLController:
 
-    def __init__(self, maximalVelocity=3.0):
+    def __init__(self, mass=0.5, maximalVelocity=3.0):
 
-        self.controllerType = "VelocityRL"
+        self.controllerName = "VelocityRL"
+        self.controllerType = CONTROLLER_TYPE.VELOCITYRL
+        
         self.dt = 0.01
 
         # state space parameters
@@ -34,6 +41,8 @@ class VelocityRLController:
         self.ringV = np.zeros((2,self.ringLen))
         self.ringIndex = 0
         self.ringAverage = np.zeros(2)
+
+        self.param = VelocityRLControllerParameters(mass=mass)
 
         # policy network setup
         
@@ -97,12 +106,13 @@ class VelocityRLController:
         vr = np.clip(vr_,-self.max_vel,self.max_vel)
         w  = rl_action_logitsOmegaYaw.detach().numpy()[0][0]
         ## vectorize and send outputs
-        vel_vector = [vf,vr,0] # in FRD
-        omega_vector = [0,0,w]
+        vel_vector = np.array([vf,vr,0]) # in FRD
+        omega_vector = np.array([0,0,w])
         # print("velocity  "+str(vf)+" "+str(vr)+"  omega "+str(w))
         return vel_vector, np.eye(3), omega_vector, obsXY
 
-    
+    def resetIntegralErrorTerms(self):
+        pass
 
 
 

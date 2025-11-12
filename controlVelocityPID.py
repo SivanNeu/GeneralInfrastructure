@@ -1,5 +1,6 @@
 from matrix_utils import hat, vee, deriv_unit_vector, saturate
 from integral_utils import IntegralError, IntegralErrorVec3
+from common import CONTROLLER_TYPE
 
 import time
 import numpy as np
@@ -30,7 +31,9 @@ class VelocityPIDController:
 
     def __init__(self, mass):
 
-        self.controllerType = "VelocityPID"
+        self.controllerName = "VelocityPID"
+        self.controllerType = CONTROLLER_TYPE.VELOCITYPID
+        
         self.t0 = time.time()
         self.t = 0.0
         self.t_pre = 0.0
