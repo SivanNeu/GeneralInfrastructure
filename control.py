@@ -96,7 +96,7 @@ class Control():
         # self._current_error_horizontal_rad = 0
         self._start_alt = None
       
-        self._last_pitch_update = time.time()
+        self._last_pitch_update = time.monotonic()
 
         self._finished_stationary_tracking = False
 
@@ -184,7 +184,7 @@ class Control():
         if not log_data:
             self._control_logger = None
         elif log_data and self._control_logger is None:
-            self._control_logger = Logger("control_logs_"+self.controlnode.controllerName+"_"+time.strftime("%Y%m%d_%H%M%S"), self.log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
+            self._control_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_control_logs_"+self.controlnode.controllerName, log_dir=self.log_directory, save_log_to_file=True, print_logs_to_console=False, datatype="CSV") 
 
         if log_data and self._control_logger is not None:              
             self.log_control_data(command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd,Omega_desired_frd=Omega_desired_frd,
@@ -237,9 +237,10 @@ class Control():
                               imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0]),
                               obs=None, modeID=0, timestamp=0):
         if obs is None:
-            obs = [np.zeros(4)]
-        obs = obs[0]
-        self._control_logger.log({"comp_time":time.time(), "command[0]":command[0], "command[1]":command[1], "command[2]":command[2], "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
+            obs = np.zeros(4)
+
+        self._control_logger.log({"comp_time":time.monotonic(), "command/[0]":command[0], "command/[1]":command[1], "command/[2]":command[2], 
+                                  "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
                                   "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
                                   "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
                                   "current_pos_ned/x":current_pos_ned[0], "current_pos_ned/y":current_pos_ned[1], "current_pos_ned/z":current_pos_ned[2],
@@ -252,7 +253,7 @@ class Control():
                                   "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
                                   "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
                                   "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
-                                  "obs[0]":obs[0], "obs[1]":obs[1], "obs[2]":obs[2]})
+                                  "obs/[0]":obs[0], "obs/[1]":obs[1], "obs/[2]":obs[2], "obs/[3]":obs[3]})
 
 ###############################################################################################################
 ###############################################################################################################################################

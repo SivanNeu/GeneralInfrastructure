@@ -11,6 +11,7 @@ docker run -it --rm \
 	--network host \
 	--privileged \
 	--name ${PX4_SITL_DOCKER_NAME} \
+	-v $(pwd)/10015_gazebo-classic_iris:/src/PX4-Autopilot/ROMFS/px4fmu_common/init.d-posix/airframes/10015_gazebo-classic_iris \
 	${PX4_SITL_DOCKER_VER} /bin/bash -c "$1 $2 $3"
 
 

@@ -68,20 +68,20 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
         self.max_speed = 5.0
         self.max_w = np.deg2rad(30)
         self.action_space = spaces.Box(
-            low=np.array([-self.max_speed, -self.max_speed, -self.max_w ], dtype=np.float32),   # v_forward, v_right, w
-            high=np.array([ self.max_speed,  self.max_speed,  self.max_w ], dtype=np.float32),    
+            low=np.array([-self.max_speed, -self.max_speed ], dtype=np.float32),   # v_forward, v_right, w
+            high=np.array([ self.max_speed,  self.max_speed ], dtype=np.float32),    
             dtype=np.float32                                                                    
         )
-        obs_low  = np.array([0.0,               # r min
-                             -1.0,              # sin(theta) min
-                             -1.0,              # cos(theta) min
-                            #  -self.max_heading, # heading_error min
+        obs_low  = np.array([-self.max_range,   # pos_x error min
+                             -self.max_range,   # pos_y error min
+                             -self.max_speed,   # vel_x min
+                             -self.max_speed,   # vel_y min
                             ],    # V_right average
                             dtype=np.float32)
-        obs_high = np.array([self.max_range,   # r max
-                             1.0,              # sin(theta) max
-                             1.0,              # cos(theta) max
-                            #  self.max_heading, # heading_error max
+        obs_high = np.array([self.max_range,   # pos_x error min
+                             self.max_range,   # pos_y error min
+                             self.max_speed,   # vel_x min
+                             self.max_speed,   # vel_y min
                              ], dtype=np.float32)        
         self.observation_space = spaces.Box(low=obs_low, high=obs_high, dtype=np.float32)
 
@@ -95,7 +95,7 @@ class PointTrajectoryEnv(gym.Env, TrainingInfoInterface):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        obs = np.array([1, sin(0), cos(0)], dtype=np.float32)
+        obs = np.array([0, 0, 0, 0], dtype=np.float32)
         return obs, {}
 
     def step(self, action):

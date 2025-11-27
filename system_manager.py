@@ -52,7 +52,7 @@ GPS_SEARCH_TIMEOUT_SEC = 3
 #################################################################################################################
 class System_Manager():
     def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False):
-        self._overall_start = time.time()
+        self._overall_start = time.monotonic()
         self._config_dir = config_dir
         self._log_dir = log_dir
         self._finished = False
@@ -62,7 +62,7 @@ class System_Manager():
         self._prev_los_ned_dir = np.zeros(3)
         self._prev_pos_ned = np.zeros(3)
         self._prev_imu_ts = 0
-        self._prev_ts = time.time()
+        self._prev_ts = time.monotonic()
         self._tracker_pos_px = None
         self._init_pos_lla_deg = None
         self._ai1Kestimates = None
@@ -76,7 +76,7 @@ class System_Manager():
 
         self.destHeight = None
         self.tar_measurement_ned = np.array([0,0,0])
-        self.heading_dir_ned = np.array([0,1,0]) 
+        self.heading_dir_ned = np.array([-1,1,0])/np.linalg.norm(np.array([-1,1,0])) 
   
         self.holdonHeading = None
         self.holdonPos_ned = None
@@ -91,8 +91,8 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ -1, 0, 0])
-        self.desiredHeadingDir_ned = np.array([0, 1, 0]) 
+        self.referencePoint = np.array([ 10, 0, 0])
+        self.desiredHeadingDir_ned = np.array([1, -1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
@@ -133,7 +133,7 @@ class System_Manager():
         ##self._control.reset(thrust=self._hardware_adapter.get_current_thrust(), yaw=self._hardware_adapter.get_current_yaw())
         self._current_pos_lla = LLA(timestamp=0, lla=np.zeros(3))
 
-        self.tic = time.time()
+        self.tic = time.monotonic()
         self.dest_pos_ned = None
 
         # self.allInOneKalman = AllInOneKalman()
@@ -150,7 +150,7 @@ class System_Manager():
                                 command, rpy_rate_cmd, quat_ned_desbodyfrd_cmd, step_dt, counter,
                                 destination_ned, current_mode):
         # print(target_received,trk_i, trk_j )
-        self._input_logger.log({"comp_time":time.time(), "imu_ts":self._currentData.imu_ned.timestamp,
+        self._input_logger.log({"comp_time":time.monotonic(), "imu_ts":self._currentData.imu_ned.timestamp,
                                 "accl_ned/x": self._currentData.imu_ned.accel[0],"accl_ned/y": self._currentData.imu_ned.accel[1], "accl_ned/z": self._currentData.imu_ned.accel[2],
                                 "gyro_ned/x": self._currentData.imu_ned.gyro[0], "gyro_ned/y": self._currentData.imu_ned.gyro[1], "gyro_ned/z": self._currentData.imu_ned.gyro[2],
                                 "pos_ned_ts": self._currentData.pos_ned_m.timestamp,
@@ -194,14 +194,14 @@ class System_Manager():
             return
         self.holdonHeading = self._currentData.quat_ned_bodyfrd.rotate_vec(np.array([1, 0, 0])) if self.holdonHeading is None else self.holdonHeading
         self.holdonPos_ned = self._currentData.pos_ned_m.ned if self.holdonPos_ned is None else self.holdonPos_ned
-        self.holdonTime = time.time() if self.holdonTime is None else self.holdonTime
+        self.holdonTime = time.monotonic() if self.holdonTime is None else self.holdonTime
         
         # imu_ned = deepcopy(self._currentData.imu_ned)          
         pos_ned = deepcopy(self._currentData.pos_ned_m.ned)
         
         quat_ned_bodyfrd = self._currentData.quat_ned_bodyfrd
                
-        current_ts = time.time()
+        current_ts = time.monotonic()
                
         controlType = None
         desired_trajectory = None
@@ -312,26 +312,26 @@ class System_Manager():
             yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
         
         if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            msg = { 'ts': time.time(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
+            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNedYaw, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            msg = { 'ts': time.time(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2]*0 }
+            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2]*0 }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelBodyYawRate, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
-            msg = { 'ts': time.time(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
+            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAccYaw, pickle.dumps(msg)])
         else:
-            msg = { 'ts': time.time(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
+            msg = { 'ts': time.monotonic(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
                 'quatNedDesBodyFrdCmd':[quat_ned_desbodyfrd_cmd.w, quat_ned_desbodyfrd_cmd.x, quat_ned_desbodyfrd_cmd.y, quat_ned_desbodyfrd_cmd.z],
                 'isRate':self.rateControlEnabled
             }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAttitude, pickle.dumps(msg)])
 
         monitorTime=1
-        if time.time() - self.tic >= monitorTime:
+        if time.monotonic() - self.tic >= monitorTime:
             # print('tar_pos_ned: %.3f %.3f %.3f, tar_vel_ned: %.3f %.3f %.3f'%(est_tracker_pos_ned[0], est_tracker_pos_ned[1], est_tracker_pos_ned[2], tar_vel_ned[0], tar_vel_ned[1], tar_vel_ned[2]))
-            self.tic = time.time()
+            self.tic = time.monotonic()
             deltaPos_ned = missionPoint
             if quat_ned_bodyfrd is not None:
                 deltaPos_ned = missionPoint - pos_ned
@@ -351,10 +351,10 @@ class System_Manager():
             self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
                                 command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
                                 counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
-        send_start = time.time()
+        send_start = time.monotonic()
             
         # self._hardware_adapter.send_command(quat_cmd=quat_ned_desbodyfrd_cmd, rpy_rate=rpyRate_cmd, thrust=command)
-        send_time = time.time()-send_start
+        send_time = time.monotonic()-send_start
         self._prev_imu_ts = self._currentData.imu_ts
         self._prev_ts = current_ts
         self._prev_pos_ned = self._currentData.pos_ned_m.ned
@@ -371,7 +371,7 @@ class System_Manager():
     def horz_circle(self, center=np.array([0,0,0]), radius=3, missionAttitudeDirection=None, Vel=1):
         if missionAttitudeDirection is None:
             missionAttitudeDirection = np.array([-1, 0, 0])
-        t=time.time()-self._overall_start
+        t=time.monotonic()-self._overall_start
         
         A = radius
         B = radius
@@ -416,7 +416,7 @@ class System_Manager():
         if missionAttitudeDirection is None:
             missionAttitudeDirection = np.array([-1, 0, 0])
         
-        t=time.time()-self._overall_start
+        t=time.monotonic()-self._overall_start
         x = missionPoint[0]
         if len(missionPoint) > 1:
             T = 10
@@ -443,7 +443,7 @@ class System_Manager():
         if missionAttitudeDirection is None:
             missionAttitudeDirection = np.array([-1, 0, 0])
             
-        t=time.time()-self._overall_start
+        t=time.monotonic()-self._overall_start
         
         x = np.array([0, 0, 0])
         x_dot = missionVelocity
@@ -466,7 +466,7 @@ class System_Manager():
             missionAttitudeDirection = np.array([-1, 0, 0])
             
         finished = False
-        t=time.time()-startTime
+        t=time.monotonic()-startTime
         
         deltaDistance = endPoint-startPoint
         deltaDir = unitVec(deltaDistance)
@@ -493,7 +493,7 @@ class System_Manager():
 ##############################################################################################################
     def vert_circle(self):
 
-        t=time.time()-self._overall_start
+        t=time.monotonic()-self._overall_start
         
         Vel=3
 
@@ -539,7 +539,7 @@ class System_Manager():
     
     def command_Lissajous(self, t=None):
         if t is None:
-            t=time.time()-self._overall_start
+            t=time.monotonic()-self._overall_start
         
         # Lissajous curve
         # x=A*sin(a*t+d), y=B*sin(b*t), z=alt+C*cos(c*t)
@@ -582,17 +582,13 @@ class System_Manager():
  
                     self._currentData = data# mavlink LOCAL_POSITION_NED      # Flight controller time                  
                     #if (self._currentData.custom_mode_id == 50593792) or \ # and self._currentData.groundspeed<0.5) or  \
-                    if self._currentData.custom_mode_id == 50593792 or \
-                        self._currentData.custom_mode_id == 196608  or \
-                        self._currentData.custom_mode_id == 131072 or \
-                        self._currentData.custom_mode_id == 65535 or \
-                        self._currentData.custom_mode_id == 84148224:  # HOLD ON state or POSITION state
+                    if self._currentData.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # HOLD ON state or POSITION state
                         
                         self._input_logger = None
                         self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
                         self.holdonHeading = self.yawDefinedDir_ned
                         self.holdonPos_ned = self._currentData.pos_ned_m.ned
-                        self.holdonTime = time.time()
+                        self.holdonTime = time.monotonic()
                         
                         if self._currentData.throttle>5:
                             if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
@@ -605,9 +601,9 @@ class System_Manager():
                         self._currentData.offboardMode = False
                         self.offboardEntry = True
                         
-                    elif self._currentData.custom_mode_id == 393216:  # OFFBOARD state
+                    elif self._currentData.custom_mode_id == PX4_FLIGHT_STATE.OFFBOARD.value:  
                         if self._input_logger is None:
-                            self._input_logger = Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
+                            self._input_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_system_manager", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
 
                         self._currentData.offboardMode = True
                         if self._controlMain.controlnode.controllerType != CONTROLLER_TYPE.VELOCITYRL:
@@ -634,12 +630,20 @@ class System_Manager():
 ############################################################################################################################
 def main():
     sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
+    next_loop_time = time.monotonic()
     while True:
         # time.sleep(0.0001)
-        time.sleep(0.01)
-        startTime = time.time()
+        
+        # Variable delay to maintain 100Hz loop frequency
+        sleep_duration = next_loop_time - time.monotonic()
+        if sleep_duration > 0:
+            time.sleep(sleep_duration)
+        
+        next_loop_time += 0.01
+        
+        startTime = time.monotonic()
         sysMgr.sys_manager_step()
-        endTime = time.time()
+        endTime = time.monotonic()
         # print("Computation Time",endTime-startTime)
 
 if __name__=='__main__':

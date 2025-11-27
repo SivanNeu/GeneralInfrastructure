@@ -56,7 +56,7 @@ subSock = zmqWrapper.subscribe([zmqTopics.topicGuidenceCmdAttitude,
                                 ], zmqTopics.topicGuidenceCmdPort)
 
 mavlinkMpsCnt = 0
-mavlinkMpsTic = time.time()
+mavlinkMpsTic = time.monotonic()
 
 quatCnt = 0
 
@@ -64,7 +64,7 @@ quatCnt = 0
 def listener(self, name, message):  
     global mavlinkMpsCnt
     m=message.to_dict()
-    m['local-ts']=time.time()
+    m['local-ts']=time.monotonic()
     if(m['mavpackettype'] == 'HEARTBEAT'):
         m['mode_string'] = ( mavutil.mode_string_v10(message))
     ## optional: save all mavlink messages - HERE
@@ -72,7 +72,7 @@ def listener(self, name, message):
     mavlinkMpsCnt += 1
 
 gpsMpsCnt = 0
-gpsMpsTic = time.time()
+gpsMpsTic = time.monotonic()
 
 RELEVANT_MAVLINK_MESSAGES = ['ALTITUDE', 
                              'ATTITUDE', 
@@ -91,13 +91,13 @@ def processMavlink(m):
     global gpsMpsCnt, gpsMpsTic, quatCnt
     try:
 
-        if time.time()-gpsMpsTic >= 3:
-            gpsMps  = gpsMpsCnt/(time.time()-gpsMpsTic)
-            quatMps = quatCnt/(time.time()-gpsMpsTic)
+        if time.monotonic()-gpsMpsTic >= 3:
+            gpsMps  = gpsMpsCnt/(time.monotonic()-gpsMpsTic)
+            quatMps = quatCnt/(time.monotonic()-gpsMpsTic)
             print('gps msp: %0.2f, quaternion MPS: %0.2f'%(gpsMps, quatMps))
             gpsMpsCnt = 0
             quatCnt   = 0
-            gpsMpsTic = time.time()
+            gpsMpsTic = time.monotonic()
 
         if m['mavpackettype'] in RELEVANT_MAVLINK_MESSAGES:
             ind = RELEVANT_MAVLINK_MESSAGES.index(m['mavpackettype'])
@@ -144,11 +144,11 @@ async def monitorMavlink():
         
     while True:
         time.sleep(0.0001)
-        if time.time() - mavlinkMpsTic >= 5:
-            mavlinkMps = mavlinkMpsCnt/(time.time() - mavlinkMpsTic)
+        if time.monotonic() - mavlinkMpsTic >= 5:
+            mavlinkMps = mavlinkMpsCnt/(time.monotonic() - mavlinkMpsTic)
             print('mavlink total mps: %0.2f'%mavlinkMps)
             mavlinkMpsCnt = 0
-            mavlinkMpsTic = time.time()
+            mavlinkMpsTic = time.monotonic()
         
         ret = zmq.select([subSock], [], [], 0.001)[0]
         if len(ret) > 0:

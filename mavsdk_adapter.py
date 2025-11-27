@@ -65,7 +65,7 @@ class MAVSDK_Adapter():
         self._prev_alt_m = None
         self._alt_vel_count = 0
         self._prev_vel_vertical = 0
-        self._prev_alt_ts = time.time()
+        self._prev_alt_ts = time.monotonic()
         self._vertical_speed_filter = Low_Pass_Filter(alpha=0.1, is_angle=False)
         self._altitude_filter = Low_Pass_Filter(alpha=0.3, is_angle=False) # was 0.3
         
@@ -104,7 +104,7 @@ class MAVSDK_Adapter():
     async def attitude(self, drone, lock):
         async for attitude in drone.telemetry.attitude_euler():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['attitude_timestamp'] = attitude.timestamp_us/1000.0
                 self.flight_data['roll_deg'] = attitude.roll_deg
                 self.flight_data['pitch_deg'] = attitude.pitch_deg
@@ -115,7 +115,7 @@ class MAVSDK_Adapter():
     async def attitudeRate(self, drone, lock):
         async for attitudeRate in drone.telemetry.attitude_angular_velocity():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['attitude_timestamp'] = attitudeRate.timestamp_us/1000.0
                 self.flight_data['roll_deg_rate'] = attitudeRate.roll_deg
                 self.flight_data['pitch_deg_rate'] = attitudeRate.pitch_deg
@@ -127,7 +127,7 @@ class MAVSDK_Adapter():
     async def highresimu(self, drone, lock):
         async for imu in drone.telemetry.imu():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['imu_ts'] = imu.timestamp_us/1000.0
                 self.flight_data['accl_frd_forward_m_s2'] = imu.acceleration_frd.forward_m_s2
                 self.flight_data['accl_frd_right_m_s2'] = imu.acceleration_frd.right_m_s2
@@ -145,7 +145,7 @@ class MAVSDK_Adapter():
     async def attitudequat(self, drone, lock):
         async for attitudequat in drone.telemetry.attitude_quaternion():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['quat_ts'] = attitudequat.timestamp_us/1000.0
                 self.flight_data['quat_w'] = attitudequat.w
                 self.flight_data['quat_x'] = attitudequat.x
@@ -157,7 +157,7 @@ class MAVSDK_Adapter():
     async def odometry(self, drone, lock):
         async for odometry in drone.telemetry.odometry():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['timestamp'] = odometry.time_usec/1000.0
                 self.flight_data['angle_rate_body_roll_rad_s'] = odometry.angular_velocity_body.roll_rad_s
                 self.flight_data['angle_rate_body_pitch_rad_s'] = odometry.angular_velocity_body.pitch_rad_s
@@ -186,7 +186,7 @@ class MAVSDK_Adapter():
     async def positionned(self, drone, lock):
         async for positionned in drone.telemetry.position_velocity_ned():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['pos_north_m'] = positionned.position.north_m
                 self.flight_data['pos_east_m'] = positionned.position.east_m
                 self.flight_data['pos_down_m'] = positionned.position.down_m
@@ -198,7 +198,7 @@ class MAVSDK_Adapter():
     async def globalpositionint(self, drone, lock):
         async for positionlla in drone.telemetry.position():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['global_lat_deg'] = positionlla.latitude_deg
                 self.flight_data['global_lon_deg'] = positionlla.longitude_deg
                 self.flight_data['global_alt_m'] = positionlla.absolute_altitude_m
@@ -208,7 +208,7 @@ class MAVSDK_Adapter():
     async def altitudem(self, drone, lock):
         async for altitudem in drone.telemetry.altitude():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['altitude_m_amsl'] = altitudem.altitude_amsl_m
                 self.flight_data['altitude_m_local'] = altitudem.altitude_local_m
                 self.flight_data['altitude_m_monotonic'] = altitudem.altitude_monotonic_m
@@ -221,13 +221,13 @@ class MAVSDK_Adapter():
     async def status_text(self, drone, lock):
         async for status_text in drone.telemetry.status_text():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['status_text'] = status_text.text
      
     async def velocity_ned(self, drone, lock):
         async for velocity_ned in drone.telemetry.velocity_ned():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['vel_north_m_s'] = velocity_ned.north_m_s
                 self.flight_data['vel_east_m_s'] = velocity_ned.east_m_s
                 self.flight_data['vel_down_m_s'] = velocity_ned.down_m_s
@@ -236,7 +236,7 @@ class MAVSDK_Adapter():
     async def scaled_imu(self, drone, lock):
         async for scaled_imu in drone.telemetry.scaled_imu():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['imu_ts'] = scaled_imu.timestamp_us/1000.0
                 self.flight_data['imu_ned_accel_x_m_s2'] = scaled_imu.acceleration_frd.forward_m_s2
                 self.flight_data['imu_ned_accel_y_m_s2'] = scaled_imu.acceleration_frd.right_m_s2
@@ -245,7 +245,7 @@ class MAVSDK_Adapter():
     async def scaled_pressure(self, drone, lock):
         async for scaled_pressure in drone.telemetry.scaled_pressure():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['timestamp'] = scaled_pressure.timestamp_us/1000.0
                 self.flight_data['absolute_press_hpa'] = scaled_pressure.absolute_pressure_hpa
                 self.flight_data['differential_press_hpa'] = scaled_pressure.differential_pressure_hpa
@@ -255,7 +255,7 @@ class MAVSDK_Adapter():
     async def rc_status(self, drone, lock):
         async for rc_status in drone.telemetry.rc_status():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['is_available'] = rc_status.is_available
                 self.flight_data['signal_strength_percent'] = rc_status.signal_strength_percent
                 self.flight_data['was_available_once'] = rc_status.was_available_once
@@ -263,7 +263,7 @@ class MAVSDK_Adapter():
     async def raw_imu(self, drone, lock):
         async for raw_imu in drone.telemetry.raw_imu():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['imu_ts'] = raw_imu.timestamp_us/1000.0
                 self.flight_data['imu_raw_frd_accel_x_m_s2'] = raw_imu.acceleration_frd.forward_m_s2
                 self.flight_data['imu_raw_frd_accel_y_m_s2'] = raw_imu.acceleration_frd.right_m_s2
@@ -275,7 +275,7 @@ class MAVSDK_Adapter():
     async def raw_gps(self, drone, lock):
         async for raw_gps in drone.telemetry.raw_gps():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['timestamp'] = raw_gps.timestamp_us/1000.0
                 self.flight_data['raw_lat_deg'] = raw_gps.latitude_deg
                 self.flight_data['raw_lon_deg'] = raw_gps.longitude_deg
@@ -284,13 +284,13 @@ class MAVSDK_Adapter():
     async def heading(self, drone, lock):
         async for heading in drone.telemetry.heading():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['heading'] = heading.heading_deg
             
     async def health(self, drone, lock):
         async for health in drone.telemetry.health():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['is_gyrometer_calibration_ok'] = health.is_gyrometer_calibration_ok
                 self.flight_data['is_accelerometer_calibration_ok'] = health.is_accelerometer_calibration_ok
                 self.flight_data['is_magnetometer_calibration_ok'] = health.is_magnetometer_calibration_ok
@@ -298,13 +298,13 @@ class MAVSDK_Adapter():
     async def flight_mode(self, drone, lock):
         async for flight_mode in drone.telemetry.flight_mode():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['flight_mode'] = flight_mode.flight_mode
             
     async def ground_truth(self, drone, lock):
         async for ground_truth in drone.telemetry.ground_truth():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['raw_lat_deg'] = ground_truth.latitude_deg
                 self.flight_data['raw_lon_deg'] = ground_truth.longitude_deg
                 self.flight_data['raw_alt_m'] = ground_truth.altitude_m
@@ -312,13 +312,13 @@ class MAVSDK_Adapter():
     async def in_air(self, drone, lock):
         async for in_air in drone.telemetry.in_air():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['in_air'] = in_air.in_air
             
     async def landing_state(self, drone, lock):
         async for landing_state in drone.telemetry.landing_state():
             async with lock:
-                self.flight_data['local_ts'] = time.time()
+                self.flight_data['local_ts'] = time.monotonic()
                 self.flight_data['landing_state'] = landing_state.landing_state
     
     async def publish_data(self, drone, lock):
@@ -615,7 +615,7 @@ class MAVSDK_Adapter():
             type_mask = type_mask | mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE
             rates = Rate_Cmd(np.zeros(3))
             
-        time_boot_ms = int(time.time()*1000)
+        time_boot_ms = int(time.monotonic()*1000)
         target_system = 0
         target_component = 1
         q = [goal_attitude.w, goal_attitude.x, goal_attitude.y, goal_attitude.z]

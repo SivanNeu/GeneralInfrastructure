@@ -34,7 +34,7 @@ class VelocityPIDController:
         self.controllerName = "VelocityPID"
         self.controllerType = CONTROLLER_TYPE.VELOCITYPID
         
-        self.t0 = time.time()
+        self.t0 = time.monotonic()
         self.t = 0.0
         self.t_pre = 0.0
         self.dt = 1e-9
@@ -112,7 +112,7 @@ class VelocityPIDController:
         """Update the current time since epoch."""
         self.t_pre = self.t
 
-        self.t = time.time() - self.t0
+        self.t = time.monotonic() - self.t0
     
 
 

@@ -24,14 +24,14 @@ new_3_win
 
 tmux select-pane -t 0
 sleep 1
-tmux send-keys "conda deactivate" ENTER
-sleep 1
+tmux send-keys "conda activate RL" ENTER
+sleep 3
 tmux send-keys "cd $PROJECT_PATH/src && python hardware_adapter.py" ENTER
 
 tmux select-pane -t 1
 sleep 1
 tmux send-keys "conda activate RL" ENTER
-sleep 1
+sleep 3
 tmux send-keys "cd $PROJECT_PATH/src && python system_manager.py" ENTER
 
 

@@ -7,7 +7,7 @@ import pickle
 import mps
 
 import time
-from common import Utils, Quaternion, Flight_Data, MAV_CMD, FLIGHT_MODE, Rate_Cmd, Logger
+from common import Utils, Quaternion, Flight_Data, MAV_CMD, FLIGHT_MODE, Rate_Cmd, Logger, PX4_FLIGHT_STATE
 from low_pass_filter import Low_Pass_Filter
 
 import numpy as np
@@ -83,7 +83,7 @@ class Hardware_Adapter():
         self._prev_alt_m = None
         self._alt_vel_count = 0
         self._prev_vel_vertical = 0
-        self._prev_alt_ts = time.time()
+        self._prev_alt_ts = time.monotonic()
         self._vertical_speed_filter = Low_Pass_Filter(alpha=0.1, is_angle=False)
         self._altitude_filter = Low_Pass_Filter(alpha=0.3, is_angle=False) # was 0.3
         # system_config_parser = Config_Parser(path=os.path.join(config_dir, "system_config.json"))
@@ -127,7 +127,7 @@ class Hardware_Adapter():
         if(msg.get_type() == "BAD_DATA"):
             return
         msg_dict = msg.to_dict()
-        msg_dict['local-ts'] = time.time()
+        msg_dict['local-ts'] = time.monotonic()
 
         if 'time_boot_ms' in msg_dict.keys():
             pass
@@ -142,10 +142,10 @@ class Hardware_Adapter():
             pass
             # print(str(msg_dict))
         
-        if self._current_data.custom_mode_id != 393216:  # OFFBOARD state
+        if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # OFFBOARD state
             self._mavlink_logger = None
         elif self._mavlink_logger is None:
-            self._mavlink_logger = Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
+            self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
         
         if self._mavlink_logger is not None:
             self._mavlink_logger.log(str(msg_dict))
@@ -450,7 +450,7 @@ class Hardware_Adapter():
             type_mask = type_mask | mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_BODY_YAW_RATE_IGNORE
             rates = Rate_Cmd(np.zeros(3))
             
-        time_boot_ms = int(time.time()*1000)
+        time_boot_ms = int(time.monotonic()*1000)
         target_system = 0
         target_component = 1
         q = [goal_attitude.w, goal_attitude.x, goal_attitude.y, goal_attitude.z]
@@ -529,7 +529,7 @@ class Hardware_Adapter():
             pass
         
         elif(key == 'VFR_HUD'):
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.altitude_m = msg_dict['alt']
             self._current_data.heading = np.deg2rad(msg_dict['heading'])
             self._current_data.throttle = msg_dict['throttle']
@@ -539,14 +539,14 @@ class Hardware_Adapter():
         elif(key == 'SCALED_IMU2'):
             pass
         elif(key =='ATTITUDE_QUATERNION'):  # 50 HZ
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_boot_ms']
             self._current_data.quat_ned_bodyfrd = Quaternion(w=float(msg_dict['q1']), x=float(msg_dict['q2']), y=float(msg_dict['q3']), z=float(msg_dict['q4']))
             self._current_data.rpy_rates = np.array([float(msg_dict['rollspeed']), float(msg_dict['pitchspeed']), float(msg_dict['yawspeed'])])
             self._current_data.gathered['quat_ned_bodyfrd'] = True
             self._current_data.gathered['rpy_rates'] = True
         elif(key == 'ATTITUDE'):
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_boot_ms']
             self._current_data.rpy = np.array([float(msg_dict['roll']), float(msg_dict['pitch']), float(msg_dict['yaw'])])
             self._current_data.rpy_rates = np.array([float(msg_dict['rollspeed']), float(msg_dict['pitchspeed']), float(msg_dict['yawspeed'])])
@@ -555,7 +555,7 @@ class Hardware_Adapter():
         elif(key == 'ATTITUDE_TARGET'):
             pass
         elif(key == 'GLOBAL_POSITION_INT'):
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_boot_ms']
             self._current_data.filt_pos_lla_deg.lla = np.array([float(msg_dict['lat'])/(1e7), float(msg_dict['lon'])/(1e7), float(msg_dict['alt'])/(1e3)])
             self._current_data.relative_m = msg_dict['relative_alt']/1000.0
@@ -564,7 +564,7 @@ class Hardware_Adapter():
             self._current_data.gathered['pos_ned_m'] = True
             self._current_data.gathered['vel_ned_m'] = True
         elif(key == 'ALTITUDE'): # 10 HZ
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_usec']/1000.0
             self._current_data.relative_m = float(msg_dict['altitude_relative'])
             self._current_data.amsl_m = float(msg_dict['altitude_amsl'])
@@ -579,7 +579,7 @@ class Hardware_Adapter():
             self._current_data.gathered['terrain_m'] = True
             self._current_data.gathered['bottom_clearance_m'] = True
         elif(key == 'HIGHRES_IMU'): # 50 HZ
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_usec']/1000.0
             self._current_data.imu_ned.accel = np.array([float(msg_dict['xacc']), float(msg_dict['yacc']), float(msg_dict['zacc'])])
             self._current_data.imu_ned.gyro = np.array([float(msg_dict['xgyro']), float(msg_dict['ygyro']), float(msg_dict['zgyro'])])
@@ -594,14 +594,14 @@ class Hardware_Adapter():
             self._current_data.gathered['pressure'] = True
             self._current_data.gathered['temperature'] = True
         elif(key == 'HEARTBEAT'):
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             if(msg_dict['custom_mode'] != 0):
                 self._current_data.custom_mode_id = msg_dict['custom_mode']
                 self._current_data.mode = msg_dict['mode_string']
                 self._current_data.gathered['custom_mode_id'] = True
                 self._current_data.gathered['mode'] = True
         elif(key== 'LOCAL_POSITION_NED' ):
-            self._current_data.local_ts = time.time()
+            self._current_data.local_ts = time.monotonic()
             self._current_data.timestamp = msg_dict['time_boot_ms']
             self._current_data.pos_ned_m.ned = np.array([msg_dict['x'], msg_dict['y'], msg_dict['z']])
             self._current_data.pos_ned_m.vel_ned = np.array([msg_dict['vx'], msg_dict['vy'], msg_dict['vz']])
@@ -618,19 +618,19 @@ def main():
     hardware_adapter = Hardware_Adapter(log_dir='../logs/')
     outFreq = 500
     outDT = 1/outFreq
-    current_ts = time.time()
+    current_ts = time.monotonic()
     outTime = current_ts+outDT
     
     printFreq = 1
     printDt = 1/printFreq
     printTime = current_ts+printDt
     while(1):
-        if(time.time() > outTime):
-            outTime = time.time()+outDT
+        if(time.monotonic() > outTime):
+            outTime = time.monotonic()+outDT
             data = pickle.dumps(hardware_adapter._current_data)
             sockPub.send_multipart([zmqTopics.topicMavlinkFlightData, data])
-        if(time.time() > printTime):
-            printTime = time.time()+printDt
+        if(time.monotonic() > printTime):
+            printTime = time.monotonic()+printDt
             print("timestamp: ", hardware_adapter._current_data.timestamp)
         hardware_adapter.listenerToMavlink()
         hardware_adapter.listenerToCommands()

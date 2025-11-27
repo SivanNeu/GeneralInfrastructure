@@ -143,7 +143,7 @@ def point_trajectory_override_defaults(env, parser: argparse.ArgumentParser):
     )
 
 def parse_args(argv=None, evaluation=False):
-    argv = ['--env=point_trajectory', '--experiment=relu_r', '--train_dir=./train_dir', 
+    argv = ['--env=point_trajectory', '--experiment=gazebo_quad_no_int', '--train_dir=./train_dir', 
             '--load_checkpoint_kind', 'best', '--eval_deterministic=True', '--video_frames=300', 
             '--device=cpu', '--nonlinearity', 'relu']
     parser, partial_cfg = parse_sf_args(argv=argv, evaluation=evaluation)
@@ -199,7 +199,9 @@ class SF_Enjoy:
         checkpoint_dict = Learner.load_checkpoint(checkpoints, device)
         self.actor_critic.load_state_dict(checkpoint_dict["model"])
         
-        self.hxs = torch.zeros(1, 1, 512)
+        # Initialize RNN hidden state: [num_agents, rnn_size] for single agent
+        rnn_size = get_rnn_size(self.cfg)
+        self.hxs = torch.zeros(1, rnn_size)
 
     def max_frames_reached(self,frames):
         return self.cfg.max_num_frames is not None and frames > self.cfg.max_num_frames
@@ -207,9 +209,21 @@ class SF_Enjoy:
     def enjoy(self, obs) -> Tuple[StatusCode, float]:
  
         with torch.no_grad():
-            normalized_obs = prepare_and_normalize_obs(self.actor_critic, {"obs": obs})
+            # Ensure obs has batch dimension if it's 1D numpy array
+            if isinstance(obs, np.ndarray):
+                if obs.ndim == 1:
+                    obs = np.expand_dims(obs, 0)
+                obs = {"obs": torch.tensor(obs, dtype=torch.float32)}
+            elif isinstance(obs, torch.Tensor):
+                if obs.ndim == 1:
+                    obs = obs.unsqueeze(0)
+                obs = {"obs": obs}
+            elif not isinstance(obs, dict):
+                obs = {"obs": obs}
+            
+            normalized_obs = prepare_and_normalize_obs(self.actor_critic, obs)
 
-            policy_outputs = self.actor_critic(normalized_obs, self.hxs[0])
+            policy_outputs = self.actor_critic(normalized_obs, self.hxs)
 
             # sample actions from the distribution by default
             actions = policy_outputs["actions"]
@@ -223,7 +237,7 @@ class SF_Enjoy:
                 actions = unsqueeze_tensor(actions, dim=-1)
             actions = preprocess_actions(self.env_info, actions)
 
-            self.hxs = [policy_outputs["new_rnn_states"]]
+            self.hxs = policy_outputs["new_rnn_states"]
             # action_mean = policy_outputs["action_logits"][0][0:3]
             # action_logstd = policy_outputs["action_logits"][0][3:6]
-        return policy_outputs["action_logits"], self.hxs[0]
+        return policy_outputs["action_logits"], self.hxs
