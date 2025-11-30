@@ -47,7 +47,7 @@ for topic in pubTopicsList:
     mpsDict[topic[0]] = mps.MPS(topic[0])
 
 subsList = [zmqTopics.topicGuidenceCmdAttitude, 
-            zmqTopics.topicGuidenceCmdVelNedYaw,
+            zmqTopics.topicGuidenceCmdVelNed,
             zmqTopics.topicGuidenceCmdVelBodyYawRate,
             # zmqTopics.topicGuidenceCmdTakeoff,
             # zmqTopics.topicGuidenceCmdLand,
@@ -332,7 +332,7 @@ class MAVSDK_Adapter():
 ################################################################################################################
     async def listenerToCommands(self, drone):
         subSock = zmqWrapper.subscribe([zmqTopics.topicGuidenceCmdAttitude, 
-                            zmqTopics.topicGuidenceCmdVelNedYaw,
+                            zmqTopics.topicGuidenceCmdVelNed,
                             zmqTopics.topicGuidenceCmdVelBodyYawRate,
                             # zmqTopics.topicGuidenceCmdTakeoff,
                             # zmqTopics.topicGuidenceCmdLand,
@@ -368,7 +368,7 @@ class MAVSDK_Adapter():
                                                                 yaw_deg_s=rpyRateCmd.yaw, 
                                                                 thrust_value=thrustCmd))
                 
-            elif topic == zmqTopics.topicGuidenceCmdVelNedYaw:     
+            elif topic == zmqTopics.topicGuidenceCmdVelNed:     
                 yawCmd = data['yawCmd']
                 velCmd = data['velCmd']
                 await drone.offboard.set_velocity_ned(VelocityNedYaw(north_m_s=velCmd[0], east_m_s=velCmd[1], down_m_s=velCmd[2], yaw_deg=yawCmd))

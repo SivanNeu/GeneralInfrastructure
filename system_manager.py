@@ -36,6 +36,7 @@ from controlVelocityRL import VelocityRLController
 #     import zmqTopics
 #     import zmqWrapper
 #     import mps
+REAL_TIME_SIMULATION = True
 
 class MISSION_TYPE(Enum):
     NONE = 0
@@ -51,8 +52,8 @@ GOAL_LOOP_FREQ_HZ = 50
 GPS_SEARCH_TIMEOUT_SEC = 3
 #################################################################################################################
 class System_Manager():
-    def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False):
-        self._overall_start = time.monotonic()
+    def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False, currentTime=None):
+        self._overall_start = time.monotonic() if currentTime is None else currentTime
         self._config_dir = config_dir
         self._log_dir = log_dir
         self._finished = False
@@ -62,7 +63,7 @@ class System_Manager():
         self._prev_los_ned_dir = np.zeros(3)
         self._prev_pos_ned = np.zeros(3)
         self._prev_imu_ts = 0
-        self._prev_ts = time.monotonic()
+        self._prev_ts = self._overall_start
         self._tracker_pos_px = None
         self._init_pos_lla_deg = None
         self._ai1Kestimates = None
@@ -91,7 +92,7 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ 10, 0, 0])
+        self.referencePoint = np.array([ -10, 10, 0])
         self.desiredHeadingDir_ned = np.array([1, -1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
@@ -106,9 +107,9 @@ class System_Manager():
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
-            self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
+            self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, currentTime=self._overall_start), maximalVelocity=self.maximalVelocity)
             # self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
-            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity)) 
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity, currentTime=self._overall_start)) 
         elif self.controllerType == CONTROLLER_TYPE.VELOCITYPID:
             self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
             
@@ -183,25 +184,32 @@ class System_Manager():
         return los_ned_dir
 
 ###############################################################################################################################################
-    def sys_manager_step(self, counter = -1, log_data=True):
-        self.gatherData()
+    def sys_manager_step(self, counter = -1, log_data=True, flight_Data=None, curTime=None):
+        if curTime is None:
+            curTime = time.monotonic()
 
-        if (not self._currentData.gathered['quat_ned_bodyfrd']) or \
-            (not self._currentData.gathered['pos_ned_m']) or \
-            (not self._currentData.gathered['imu_ned']) :#or \
-        # (not self._currentData.gathered['tracker_px']):
-            print('-return-0-')
-            return
+        if flight_Data is None:
+            self.gatherData()
+
+            if (not self._currentData.gathered['quat_ned_bodyfrd']) or \
+                (not self._currentData.gathered['pos_ned_m']) or \
+                (not self._currentData.gathered['imu_ned']) :#or \
+            # (not self._currentData.gathered['tracker_px']):
+                print('-return-0-')
+                return
+        else:
+            self._currentData = flight_Data
+            
         self.holdonHeading = self._currentData.quat_ned_bodyfrd.rotate_vec(np.array([1, 0, 0])) if self.holdonHeading is None else self.holdonHeading
         self.holdonPos_ned = self._currentData.pos_ned_m.ned if self.holdonPos_ned is None else self.holdonPos_ned
-        self.holdonTime = time.monotonic() if self.holdonTime is None else self.holdonTime
+        self.holdonTime = curTime if self.holdonTime is None else self.holdonTime
         
         # imu_ned = deepcopy(self._currentData.imu_ned)          
         pos_ned = deepcopy(self._currentData.pos_ned_m.ned)
         
         quat_ned_bodyfrd = self._currentData.quat_ned_bodyfrd
                
-        current_ts = time.monotonic()
+        current_ts = curTime
                
         controlType = None
         desired_trajectory = None
@@ -312,15 +320,15 @@ class System_Manager():
             yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
         
         if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNedYaw, pickle.dumps(msg)])
+            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':np.nan, }
+            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':0, 'yawRateCmd':rpyRate_cmd[2]*0 }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelBodyYawRate, pickle.dumps(msg)])
+            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':np.nan, 'yawRateCmd':rpyRate_cmd[2] }
+            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
-            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':0, }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAccYaw, pickle.dumps(msg)])
+            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':np.nan, }
+            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAcc, pickle.dumps(msg)])
         else:
             msg = { 'ts': time.monotonic(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
                 'quatNedDesBodyFrdCmd':[quat_ned_desbodyfrd_cmd.w, quat_ned_desbodyfrd_cmd.x, quat_ned_desbodyfrd_cmd.y, quat_ned_desbodyfrd_cmd.z],
@@ -351,14 +359,14 @@ class System_Manager():
             self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
                                 command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
                                 counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
-        send_start = time.monotonic()
             
         # self._hardware_adapter.send_command(quat_cmd=quat_ned_desbodyfrd_cmd, rpy_rate=rpyRate_cmd, thrust=command)
-        send_time = time.monotonic()-send_start
         self._prev_imu_ts = self._currentData.imu_ts
         self._prev_ts = current_ts
         self._prev_pos_ned = self._currentData.pos_ned_m.ned
         self.prev_quat_ned_desbodyfrd_cmd = quat_ned_desbodyfrd_cmd
+        
+        return msg
         
             
 #################################################################################################################
@@ -628,23 +636,205 @@ class System_Manager():
 ############################################################################################################################
 ############################################################################################################################
 ############################################################################################################################
-def main():
-    sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
-    next_loop_time = time.monotonic()
-    while True:
-        # time.sleep(0.0001)
-        
-        # Variable delay to maintain 100Hz loop frequency
-        sleep_duration = next_loop_time - time.monotonic()
-        if sleep_duration > 0:
-            time.sleep(sleep_duration)
-        
-        next_loop_time += 0.01
-        
-        startTime = time.monotonic()
-        sysMgr.sys_manager_step()
-        endTime = time.monotonic()
-        # print("Computation Time",endTime-startTime)
+############################################################################################################################
+############################################################################################################################
+############################################################################################################################
+############################################################################################################################
+############################################################################################################################
+############################################################################################################################
+def getFlightData(quad, t=None ):
+    if t is None:
+        t=time.monotonic()
+        timestamp = time.time()
+    else:
+        timestamp = t
+    flight_Data = Flight_Data()
+    success = False
+    
+    flight_Data.local_ts = t
+    flight_Data.timestamp = timestamp
+    flight_Data.pos_ned_m.ned = quad.pos
+    flight_Data.pos_ned_m.vel_ned = quad.vel
+    flight_Data.pos_ned_m.timestamp = timestamp
+    flight_Data.altitude_m = quad.pos[2]
+    flight_Data.heading = quad.euler[2]
+    flight_Data.throttle = quad.thr[2]
 
+    flight_Data.quat_ned_bodyfrd = Quaternion(w=quad.quat[0], x=quad.quat[1], y=quad.quat[2], z=quad.quat[3])
+    flight_Data.rpy_rates = omega_frd2rpyRate(quad.euler, quad.omega)
+
+    flight_Data.rpy = quad.euler
+    flight_Data.filt_pos_lla_deg.lla = quad.pos
+    flight_Data.relative_m = quad.pos[2]
+
+    flight_Data.amsl_m = quad.pos[2]
+    flight_Data.local_m = quad.pos[2]
+    flight_Data.monotonic_m = quad.pos[2]
+    flight_Data.terrain_m = quad.pos[2]
+    flight_Data.bottom_clearance_m = quad.pos[2]
+
+    flight_Data.imu_ned.accel = quad.acc
+    flight_Data.imu_ned.gyro = quad.omega
+    flight_Data.imu_ned.timestamp = flight_Data.timestamp
+
+    flight_Data.gathered['imu_ned'] = True
+    flight_Data.gathered['absolute_press_hpa'] = True
+    flight_Data.gathered['differential_press_hpa'] = True
+    flight_Data.gathered['pressure'] = True
+    flight_Data.gathered['temperature'] = True
+    flight_Data.gathered['relative_m'] = True
+    flight_Data.gathered['amsl_m'] = True
+    flight_Data.gathered['local_m'] = True
+    flight_Data.gathered['monotonic_m'] = True
+    flight_Data.gathered['terrain_m'] = True
+    flight_Data.gathered['bottom_clearance_m'] = True
+    flight_Data.gathered['pos_ned_m'] = True
+    flight_Data.gathered['vel_ned_m'] = True
+    flight_Data.gathered['rpy'] = True
+    flight_Data.gathered['rpy_rates'] = True
+    flight_Data.gathered['quat_ned_bodyfrd'] = True
+    flight_Data.gathered['rpy_rates'] = True
+    flight_Data.gathered['pos_ned_m'] = True
+    flight_Data.gathered['vel_ned_m'] = True            
+
+    return flight_Data
+############################################################################################################################
+def quad_sim(t, Ts, quad, ctrl, wind, desired):
+    
+    # Dynamics (using last timestep's commands)
+    # ---------------------------
+    quad.update(t, Ts, ctrl.w_cmd, wind)
+    t += Ts
+
+    # Trajectory for Desired States 
+    # ---------------------------
+    desPos = np.array([0.0, 0.0, 0.0])    # Desired position (x, y, z)
+    desVel = np.array([desired['vel'][0], desired['vel'][1], 0.0])    # Desired velocity (xdot, ydot, zdot)
+    desAcc = np.zeros(3)    # Desired acceleration (xdotdot, ydotdot, zdotdot)
+    desThr = np.zeros(3)    # Desired thrust in N-E-D directions (or E-N-U, if selected)
+    desEul = np.zeros(3)    # Desired orientation in the world frame (phi, theta, psi)
+    desPQR = np.zeros(3)    # Desired angular velocity in the body frame (p, q, r)
+    desYawRate = desired['yaw_rate']         # Desired yaw speed
+    sDes = np.hstack((desPos, desVel, desAcc, desThr, desEul, desPQR, desYawRate)).astype(float)
+
+    # Generate Commands (for next iteration)
+    # ---------------------------
+    ctrl.controller(quad, sDes, Ts)
+
+    return t
+############################################################################################################################
+
+def main():
+    if REAL_TIME_SIMULATION:
+        sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
+        next_loop_time = time.monotonic()
+        while True:
+            # time.sleep(0.0001)
+            
+            # Variable delay to maintain 100Hz loop frequency
+            sleep_duration = next_loop_time - time.monotonic()
+            if sleep_duration > 0:
+                time.sleep(sleep_duration)
+            
+            next_loop_time += 0.01
+            
+            startTime = time.monotonic()
+            sysMgr.sys_manager_step()
+            endTime = time.monotonic()
+            # print("Computation Time",endTime-startTime)
+    else:
+        sysMgr = System_Manager(log_dir='../logs/', config_dir='config/', currentTime=0)
+        sys.path.append(os.path.join(os.path.dirname(__file__), 'QuadSim'))
+        from QuadSim.quadFiles.quad import Quadcopter
+        from QuadSim.trajectory import Trajectory
+        from QuadSim.ctrl import Control
+        from QuadSim.utils.windModel import Wind
+        from QuadSim.utils.display import makeFigures
+        start_time = time.time()
+    
+        # Simulation Setup
+        # --------------------------- 
+        t=0
+        Ti = 0
+        Ts = 0.1
+        Tf = 40
+        ifsave = 0
+    
+        # Choose trajectory settings
+        # --------------------------- 
+        trajSelect = np.zeros(3)
+
+        # Initialize Quadcopter, Controller, Wind, Result Matrixes
+        # ---------------------------
+        quad = Quadcopter(Ti)
+        traj = Trajectory(quad, "xy_vel_z_pos", trajSelect)
+        ctrl = Control(quad, traj.yawType)
+        wind = Wind('None', 2.0, 90, -15)
+        
+        # Initialize Result Matrixes
+        # ---------------------------
+        numTimeStep = int(Tf/Ts+1)
+
+        t_all          = np.zeros(numTimeStep)
+        s_all          = np.zeros([numTimeStep, len(quad.state)])
+        pos_all        = np.zeros([numTimeStep, len(quad.pos)])
+        vel_all        = np.zeros([numTimeStep, len(quad.vel)])
+        quat_all       = np.zeros([numTimeStep, len(quad.quat)])
+        omega_all      = np.zeros([numTimeStep, len(quad.omega)])
+        euler_all      = np.zeros([numTimeStep, len(quad.euler)])
+        sDes_traj_all  = np.zeros([numTimeStep, len(traj.sDes)])
+        sDes_calc_all  = np.zeros([numTimeStep, len(ctrl.sDesCalc)])
+        w_cmd_all      = np.zeros([numTimeStep, len(ctrl.w_cmd)])
+        wMotor_all     = np.zeros([numTimeStep, len(quad.wMotor)])
+        thr_all        = np.zeros([numTimeStep, len(quad.thr)])
+        tor_all        = np.zeros([numTimeStep, len(quad.tor)])
+
+        t_all[0]            = Ti
+        s_all[0,:]          = quad.state
+        pos_all[0,:]        = quad.pos
+        vel_all[0,:]        = quad.vel
+        quat_all[0,:]       = quad.quat
+        omega_all[0,:]      = quad.omega
+        euler_all[0,:]      = quad.euler
+        sDes_traj_all[0,:]  = traj.sDes
+        sDes_calc_all[0,:]  = ctrl.sDesCalc
+        w_cmd_all[0,:]      = ctrl.w_cmd
+        wMotor_all[0,:]     = quad.wMotor
+        thr_all[0,:]        = quad.thr
+        tor_all[0,:]        = quad.tor        
+        i = 0
+        
+        desired = {'vel': [0.0, 0.0, 0.0], 'yaw_rate': 0.0}
+        while(t<Tf):
+            t = quad_sim(t, Ts, quad, ctrl, wind, desired)
+            flight_Data = getFlightData(quad, t=t)
+            msg=sysMgr.sys_manager_step(flight_Data=flight_Data, curTime=t)
+
+            desired['vel'] = msg['velCmd']
+            desired['yaw_rate'] = msg['yawRateCmd']
+            t += Ts
+            
+            i += 1           
+            t_all[i]             = t
+            s_all[i,:]           = quad.state
+            pos_all[i,:]         = quad.pos
+            vel_all[i,:]         = quad.vel
+            quat_all[i,:]        = quad.quat
+            omega_all[i,:]       = quad.omega
+            euler_all[i,:]       = quad.euler
+            sDes_traj_all[i,:]   = traj.sDes
+            sDes_calc_all[i,:]   = ctrl.sDesCalc
+            w_cmd_all[i,:]       = ctrl.w_cmd
+            wMotor_all[i,:]      = quad.wMotor
+            thr_all[i,:]         = quad.thr
+            tor_all[i,:]         = quad.tor
+        pass
+    
+    # View Results
+    # ---------------------------
+
+    # utils.fullprint(sDes_traj_all[:,3:6])
+    makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all)
+    pass
 if __name__=='__main__':
     main()

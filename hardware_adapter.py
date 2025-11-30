@@ -66,10 +66,9 @@ for topic in pubTopicsList:
     mpsDict[topic[0]] = mps.MPS(topic[0])
 
 subSock = zmqWrapper.subscribe([zmqTopics.topicGuidenceCmdAttitude, 
-                                zmqTopics.topicGuidenceCmdVelNedYaw,
-                                zmqTopics.topicGuidenceCmdVelBodyYawRate,
-                                # zmqTopics.topicGuidenceCmdTakeoff,
-                                # zmqTopics.topicGuidenceCmdLand,
+                                zmqTopics.topicGuidenceCmdVelNed,
+                                zmqTopics.topicGuidenceCmdVelBody,
+                                zmqTopics.topicGuidenceCmdAcc,
                                 zmqTopics.topicGuidanceCmdArm,
                                 ], zmqTopics.topicGuidenceCmdPort)
 
@@ -161,30 +160,7 @@ class Hardware_Adapter():
         topic = data[0]
         data = pickle.loads(data[1])
         
-        if topic == zmqTopics.topicGuidenceCmdAttitude:                           # mavlink ATTITUDE
-            msg = pickle.loads(data[1])
-            targetQuat = Quaternion(x=msg['quatNedDesBodyFrdCmd'][1], y=msg['quatNedDesBodyFrdCmd'][2], z=msg['quatNedDesBodyFrdCmd'][3], w=msg['quatNedDesBodyFrdCmd'][0])
-            rpyRateCmd = Rate_Cmd(roll=msg['rpyRateCmd'][0], pitch=msg['rpyRateCmd'][1], yaw=msg['rpyRateCmd'][2])
-            thrustCmd = msg['thrustCmd']
-            self._send_goal_attitude(targetQuat, rpyRateCmd, thrustCmd)
-            
-        elif topic == zmqTopics.topicGuidenceCmdVelNedYaw:     
-            yawCmd = data['yawCmd']
-            velCmd = data['velCmd']
-            self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=None)
-            
-        elif topic == zmqTopics.topicGuidenceCmdVelBodyYawRate:     
-            yawRateCmd = data['yawRateCmd']
-            velCmd = self._current_data.quat_ned_bodyfrd.rotate_vec(data['velCmd'])
-            # velCmd[2] = 0.0
-            self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=None, yaw_rate=yawRateCmd)
-            
-        elif topic == zmqTopics.topicGuidenceCmdAccYaw:
-            yawCmd = data['yawCmd']
-            accCmd = data['accCmd']
-            self._send_setpoint(pos=None, vel=None, acc=accCmd, yaw=yawCmd, yaw_rate=None)
-            
-        elif topic == zmqTopics.topicGuidenceCmdAttitude:
+        if topic == zmqTopics.topicGuidenceCmdAttitude:
             targetQuat = Quaternion(x=data['quatNedDesBodyFrdCmd'][1], y=data['quatNedDesBodyFrdCmd'][2], z=data['quatNedDesBodyFrdCmd'][3], w=data['quatNedDesBodyFrdCmd'][0])
             rpyRateCmd = Rate_Cmd(roll=data['rpyRateCmd'][0], pitch=data['rpyRateCmd'][1], yaw=data['rpyRateCmd'][2])
             thrustCmd = data['thrustCmd']
@@ -193,6 +169,25 @@ class Hardware_Adapter():
                 self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=None, rates=rpyRateCmd)
             else:
                 self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=targetQuat, rates=None)
+            
+        elif topic == zmqTopics.topicGuidenceCmdVelNed:     
+            yawCmd = data['yawCmd'] if not np.isnan(data['yawCmd']) else None
+            yawRateCmd = data['yawRateCmd'] if not np.isnan(data['yawRateCmd']) else None
+            velCmd = data['velCmd']
+            self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=yawRateCmd)
+            
+        elif topic == zmqTopics.topicGuidenceCmdVelBody:     
+            yawCmd = data['yawCmd'] if not np.isnan(data['yawCmd']) else None
+            yawRateCmd = data['yawRateCmd'] if not np.isnan(data['yawRateCmd']) else None
+            velCmd = self._current_data.quat_ned_bodyfrd.rotate_vec(data['velCmd'])
+            # velCmd[2] = 0.0
+            self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=yawRateCmd)
+            
+        elif topic == zmqTopics.topicGuidenceCmdAcc:
+            yawCmd = data['yawCmd'] if not np.isnan(data['yawCmd']) else None
+            yawRateCmd = data['yawRateCmd'] if not np.isnan(data['yawRateCmd']) else None
+            accCmd = data['accCmd']
+            self._send_setpoint(pos=None, vel=None, acc=accCmd, yaw=yawCmd, yaw_rate=yawRateCmd)
             
         elif topic == zmqTopics.topicGuidenceCmdTakeoff:
             msg = pickle.loads(data[1])

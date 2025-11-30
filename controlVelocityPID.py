@@ -29,12 +29,12 @@ class VelocityPIDControllerParameters:
 ###############################################################################################################
 class VelocityPIDController:
 
-    def __init__(self, mass):
+    def __init__(self, mass, currentTime=None):
 
         self.controllerName = "VelocityPID"
         self.controllerType = CONTROLLER_TYPE.VELOCITYPID
         
-        self.t0 = time.monotonic()
+        self.t0 = time.monotonic() if currentTime is None else currentTime
         self.t = 0.0
         self.t_pre = 0.0
         self.dt = 1e-9
@@ -82,7 +82,7 @@ class VelocityPIDController:
         kV = self.param.kV @ np.diag(vel_control)
         kIV = self.param.kIV @ np.diag(vel_control)
 
-        self.update_current_time()
+        self.update_current_time(currentTime=currentData.local_ts)
         self.dt = self.t - self.t_pre
 
         # Translational error functions
@@ -108,11 +108,11 @@ class VelocityPIDController:
         return velocity_command, np.eye(3), np.zeros(3)
 ###############################################################################################################
 
-    def update_current_time(self):
+    def update_current_time(self, currentTime):
         """Update the current time since epoch."""
         self.t_pre = self.t
 
-        self.t = time.monotonic() - self.t0
+        self.t = currentTime - self.t0
     
 
 

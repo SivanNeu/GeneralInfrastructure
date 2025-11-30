@@ -18,20 +18,19 @@ class VelocityRLControllerParameters:
 ###############################################################################################################
 class VelocityRLController:
 
-    def __init__(self, mass=0.5, maximalVelocity=3.0):
+    def __init__(self, mass=0.5, maximalVelocity=3.0, currentTime=None):
 
         self.controllerName = "VelocityRL"
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         
-        self.lastTime = time.monotonic()
-        self.current_time = time.monotonic()
+        self.lastTime = time.monotonic() if currentTime is None else currentTime
+        self.current_time = time.monotonic() if currentTime is None else currentTime
 
         # state space parameters
         self.pos_self = [0.0,0.0,0.0] # NED
         self.vel_self = [0.0,0.0,0.0] # NED
         self.pos_target = [0.0,0.0,0.0]
         self.heading_target = [0.0,0.0,0.0]
-        self.pos_integral = [0.0,0.0,0.0]
 
         self.max_vel = maximalVelocity
         # Position integral scale
@@ -64,33 +63,30 @@ class VelocityRLController:
         
         self.pos_target, self.vel_target, _, _, _ = desiredBodyState[0]
         self.heading_target, _, _= desiredBodyState[1]; self.heading_target = self.heading_target/np.linalg.norm(self.heading_target)
-        self.heading_target_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(self.heading_target)
         
-        heading_error = np.arctan2(self.heading_target_bodyfrd[1], self.heading_target_bodyfrd[0])
+        heading_error = np.arctan2(self.heading_target[1], self.heading_target[0])
         
         if currentData is not None:
             self.yaw=currentData.rpy[2]
         
         ## transform into observation space data
-        pos_error_body = quat_ned_bodyfrd.inv().rotate_vec(self.pos_target - self.pos_self)
-        if np.linalg.norm(pos_error_body) > self.max_range:
-            pos_error_body = pos_error_body / np.linalg.norm(pos_error_body) * self.max_range
-        vel_error_body = quat_ned_bodyfrd.inv().rotate_vec(self.vel_target - self.vel_self)
-        if np.linalg.norm(vel_error_body) > self.max_vel:
-            vel_error_body = vel_error_body / np.linalg.norm(vel_error_body) * self.max_vel
-        pos_int = self.pos_integral
-        np.clip(pos_int, -self.int_scale, self.int_scale)
+        pos_error_ned = (self.pos_target - self.pos_self)[:2]
+        vel_error_ned = self.vel_self[:2]
+        if np.linalg.norm(pos_error_ned) > self.max_range:
+            pos_error_ned = pos_error_ned / np.linalg.norm(pos_error_ned) * self.max_range
+        if np.linalg.norm(vel_error_ned) > self.max_vel:
+            vel_error_ned = vel_error_ned / np.linalg.norm(vel_error_ned) * self.max_vel
+
         # Update position integral (accumulate position error)
-        self.current_time = time.monotonic()
+        self.current_time = currentData.local_ts
         dt = self.current_time - self.lastTime
+        if dt < 0:
+            dt = 0
+            self.lastTime = self.current_time
         self.lastTime = self.current_time
-        if currentData.custom_mode_id == PX4_FLIGHT_STATE.OFFBOARD.value:
-            self.pos_integral += pos_error_body * dt
-        else:
-            self.pos_integral = np.zeros(3)
         
-        obsXY = np.array([pos_error_body[0], pos_error_body[1], vel_error_body[0], vel_error_body[1]], dtype=np.float32)
-        obsHeading = np.array([[np.sin(heading_error), np.cos(heading_error), gyro_bodyfrd[2]*0]],dtype=np.float32)
+        obsXY = np.array([pos_error_ned[0], pos_error_ned[1], vel_error_ned[0], vel_error_ned[1]], dtype=np.float32)
+        obsHeading = np.array([[np.sin(-heading_error), np.cos(-heading_error), gyro_bodyfrd[2]]],dtype=np.float32)
         # obs = np.concatenate([obsXY[0], obsHeading[0]], dtype=np.float32)
         
         ## execute policy inference
