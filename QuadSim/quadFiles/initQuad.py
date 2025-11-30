@@ -14,15 +14,15 @@ import config
 
 
 def sys_params():   
-    # data from AirGym quadcopter
-    mB  = 0.516       # mass (kg)
+    # data from iris quadcopter
+    mB  = 1.5       # mass (kg)
     g   = 9.81      # gravity (m/s/s)
-    dxm = 0.05374     # arm length (m)
-    dym = 0.05374      # arm length (m)
-    dzm = 0.024      # motor height (m)
-    IB  = np.array([[0.04, 0,      0     ],
-                    [0,      0.04, 0     ],
-                    [0,      0,      0.08]]) # Inertial tensor (kg*m^2)
+    dxm = 0.13     # arm length (m)
+    dym = 0.22      # arm length (m)
+    dzm = 0      # motor height (m)
+    IB  = np.array([[0.029125, 0,      0     ],
+                    [0,      0.029125, 0     ],
+                    [0,      0,      0.055225]]) # Inertial tensor (kg*m^2)
     IRzz = 0.039396244   # Rotor moment of inertia (kg*m^2)
 
 
@@ -39,9 +39,9 @@ def sys_params():
     # params["interpYaw"] = bool(False)       # Interpolate Yaw setpoints in waypoint trajectory
 
     params["Cd"]         = 0.0
-    params["kTh"]        = 52.16e-9 # thrust coeff (N/(rad/s)^2) 
+    params["kTh"]        = 5.84e-6 # thrust coeff (N/(rad/s)^2) 
     params["kTo"]        = params["kTh"]*0.06            # torque coeff (Nm/(rad/s)^2) 
-    params["HoverThr"]   = 0.27  # Thrust for hovering [%]
+    params["HoverThr"]   = 0.73  # Thrust for hovering [%]
     params["mixerFM"]    = makeMixerFM(params) # Make mixer that calculated Thrust (F) and moments (M) as a function on motor speeds
     params["mixerFMinv"] = inv(params["mixerFM"])
     params["minThr"]     = 0.1*4                                         # Minimum total thrust [Nt]

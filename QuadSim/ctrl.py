@@ -109,44 +109,30 @@ class Control:
         self.yawFF     = np.zeros(3)
 
     
-    def controller(self, traj, quad, sDes, Ts):
+    def controller(self, quad, sDes, Ts):
 
         # Desired State (Create a copy, hence the [:])
         # ---------------------------
-        self.pos_sp[:]    = traj.sDes[0:3]
-        self.vel_sp[:]    = traj.sDes[3:6]
-        self.acc_sp[:]    = traj.sDes[6:9]
-        self.thrust_sp[:] = traj.sDes[9:12]
-        self.eul_sp[:]    = traj.sDes[12:15]
-        self.pqr_sp[:]    = traj.sDes[15:18]
-        self.yawFF[:]     = traj.sDes[18]
+        self.pos_sp[:]    = sDes[0:3]
+        self.vel_sp[:]    = sDes[3:6]
+        self.acc_sp[:]    = sDes[6:9]
+        self.thrust_sp[:] = sDes[9:12]
+        self.eul_sp[:]    = sDes[12:15]
+        self.pqr_sp[:]    = sDes[15:18]
+        self.yawFF[:]     = sDes[18]
         
-        # Select Controller
-        # ---------------------------
-        if (traj.ctrlType == "xyz_vel"):
-            self.saturateVel()
-            self.z_vel_control(quad, Ts)
-            self.xy_vel_control(quad, Ts)
-            self.thrustToAttitude(quad, Ts)
-            self.attitude_control(quad, Ts)
-            self.rate_control(quad, Ts)
-        elif (traj.ctrlType == "xy_vel_z_pos"):
+        if not np.isnan(self.pos_sp[2]):
             self.z_pos_control(quad, Ts)
-            self.saturateVel()
-            self.z_vel_control(quad, Ts)
-            self.xy_vel_control(quad, Ts)
-            self.thrustToAttitude(quad, Ts)
-            self.attitude_control(quad, Ts)
-            self.rate_control(quad, Ts)
-        elif (traj.ctrlType == "xyz_pos"):
-            self.z_pos_control(quad, Ts)
+        if not any(np.isnan(self.pos_sp[0:2])):
             self.xy_pos_control(quad, Ts)
-            self.saturateVel()
+        self.saturateVel()
+        if not np.isnan(self.vel_sp[2]):
             self.z_vel_control(quad, Ts)
+        if not any(np.isnan(self.vel_sp[0:2])):
             self.xy_vel_control(quad, Ts)
-            self.thrustToAttitude(quad, Ts)
-            self.attitude_control(quad, Ts)
-            self.rate_control(quad, Ts)
+        self.thrustToAttitude(quad, Ts)
+        self.attitude_control(quad, Ts)
+        self.rate_control(quad, Ts)
 
         # Mixer
         # --------------------------- 

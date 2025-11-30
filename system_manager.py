@@ -36,7 +36,7 @@ from controlVelocityRL import VelocityRLController
 #     import zmqTopics
 #     import zmqWrapper
 #     import mps
-REAL_TIME_SIMULATION = True
+REAL_TIME_SIMULATION = False
 
 class MISSION_TYPE(Enum):
     NONE = 0
@@ -92,7 +92,7 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ -10, 10, 0])
+        self.referencePoint = np.array([ 10, 0, 0])
         self.desiredHeadingDir_ned = np.array([1, -1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
@@ -708,7 +708,7 @@ def quad_sim(t, Ts, quad, ctrl, wind, desired):
 
     # Trajectory for Desired States 
     # ---------------------------
-    desPos = np.array([0.0, 0.0, 0.0])    # Desired position (x, y, z)
+    desPos = np.array([desired['pos'][0], desired['pos'][1], desired['pos'][2]])    # Desired position (x, y, z)
     desVel = np.array([desired['vel'][0], desired['vel'][1], 0.0])    # Desired velocity (xdot, ydot, zdot)
     desAcc = np.zeros(3)    # Desired acceleration (xdotdot, ydotdot, zdotdot)
     desThr = np.zeros(3)    # Desired thrust in N-E-D directions (or E-N-U, if selected)
@@ -719,7 +719,7 @@ def quad_sim(t, Ts, quad, ctrl, wind, desired):
 
     # Generate Commands (for next iteration)
     # ---------------------------
-    ctrl.controller(quad, sDes, Ts)
+    ctrl.controller(quad=quad, sDes=sDes, Ts=Ts)
 
     return t
 ############################################################################################################################
@@ -750,13 +750,16 @@ def main():
         from QuadSim.ctrl import Control
         from QuadSim.utils.windModel import Wind
         from QuadSim.utils.display import makeFigures
+        from QuadSim.utils.animation import sameAxisAnimation
         start_time = time.time()
     
         # Simulation Setup
         # --------------------------- 
         t=0
         Ti = 0
-        Ts = 0.1
+        Ts = 0.01
+        control_dt = 0.1
+        
         Tf = 40
         ifsave = 0
     
@@ -804,18 +807,22 @@ def main():
         tor_all[0,:]        = quad.tor        
         i = 0
         
-        desired = {'vel': [0.0, 0.0, 0.0], 'yaw_rate': 0.0}
-        while(t<Tf):
-            t = quad_sim(t, Ts, quad, ctrl, wind, desired)
-            flight_Data = getFlightData(quad, t=t)
-            msg=sysMgr.sys_manager_step(flight_Data=flight_Data, curTime=t)
+        desired = {'pos': [np.nan, np.nan, 0], 
+                   'vel': [0.0, 0.0, 0.0], 
+                   'yaw_rate': 0.0}
+        globalTime = 0
+        while(globalTime<Tf):
+            flight_Data = getFlightData(quad, t=globalTime)
+            msg=sysMgr.sys_manager_step(flight_Data=flight_Data, curTime=globalTime)
 
             desired['vel'] = msg['velCmd']
             desired['yaw_rate'] = msg['yawRateCmd']
-            t += Ts
+            for ind in range(int(control_dt/Ts)):
+                quad_sim(t=globalTime+ind*Ts, Ts=Ts, quad=quad, ctrl=ctrl, wind=wind, desired=desired)
+            globalTime += control_dt
             
             i += 1           
-            t_all[i]             = t
+            t_all[i]             = globalTime
             s_all[i,:]           = quad.state
             pos_all[i,:]         = quad.pos
             vel_all[i,:]         = quad.vel
@@ -835,6 +842,8 @@ def main():
 
     # utils.fullprint(sDes_traj_all[:,3:6])
     makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all)
+    ani = sameAxisAnimation(t_all, traj.wps, pos_all, quat_all, sDes_traj_all, Ts, quad.params, traj.xyzType, traj.yawType, ifsave)
+    plt.show()
     pass
 if __name__=='__main__':
     main()
