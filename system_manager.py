@@ -36,8 +36,7 @@ from controlVelocityRL import VelocityRLController
 #     import zmqTopics
 #     import zmqWrapper
 #     import mps
-REAL_TIME_SIMULATION = False
-
+REAL_TIME = True
 class MISSION_TYPE(Enum):
     NONE = 0
     WAYPOINT = 1
@@ -92,18 +91,20 @@ class System_Manager():
         # start scenario definitions #
         ##############################
         factor = 1
-        self.referencePoint = np.array([ 10, 0, 0])
-        self.desiredHeadingDir_ned = np.array([1, -1, 0])
+        self.referencePoint = np.array([ 0, 0, 0])
+        self.desiredHeadingDir_ned = np.array([0, 0, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
-        self.maximalVelocity = 10*factor # m/s (horizontal)
+        self.yawCommandFactor = 1        
+        self.maximalVelocity = 2*factor # m/s (horizontal)
         self.descentVelocity = 10
+        self.targetVelocity = 3
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 15*factor
+        self.circleRadius = 2*factor
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
@@ -245,12 +246,13 @@ class System_Manager():
             self.heading_dir_ned = desired_trajectory[1][0]
             
         elif self.missionType == MISSION_TYPE.CIRCLE: 
-            desired_trajectory = self.horz_circle(center=missionPoint, radius=self.circleRadius, Vel=3, missionAttitudeDirection=self.heading_dir_ned)   # bui
+            desired_trajectory = self.horz_circle(center=missionPoint, radius=self.circleRadius, Vel=self.targetVelocity, missionAttitudeDirection=self.heading_dir_ned)   # bui
             # desired_trajectory = self.horz_circle(center = np.array([-10,20,0]), radius=10)    # corner ok, bui fades away
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
-        
+            self.heading_dir_ned = desired_trajectory[1][0]
+            
         elif self.missionType == MISSION_TYPE.LISSAJOUS:
             desired_trajectory = self.command_Lissajous()
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
@@ -324,7 +326,7 @@ class System_Manager():
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':np.nan, 'yawRateCmd':rpyRate_cmd[2] }
+            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':np.nan, 'yawRateCmd':rpyRate_cmd[2]*self.yawCommandFactor}
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
             msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':np.nan, }
@@ -410,7 +412,7 @@ class System_Manager():
         b1 = missionAttitudeDirection
         b1_dot = np.array([0,0,0])  #
         b1_2dot = np.array([0,0,0])        # w = 2 * pi / 10
-        # b1d = np.array([cos(w * t), sin(w * t), 0])
+        b1 = np.array([cos(w * t), sin(w * t), 0])
         # b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
         # b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
 
@@ -699,33 +701,23 @@ def getFlightData(quad, t=None ):
 
     return flight_Data
 ############################################################################################################################
-def quad_sim(t, Ts, quad, ctrl, wind, desired):
+def quad_sim(t, Ts, quad, ctrl, wind, traj):
     
     # Dynamics (using last timestep's commands)
     # ---------------------------
     quad.update(t, Ts, ctrl.w_cmd, wind)
     t += Ts
 
-    # Trajectory for Desired States 
-    # ---------------------------
-    desPos = np.array([desired['pos'][0], desired['pos'][1], desired['pos'][2]])    # Desired position (x, y, z)
-    desVel = np.array([desired['vel'][0], desired['vel'][1], 0.0])    # Desired velocity (xdot, ydot, zdot)
-    desAcc = np.zeros(3)    # Desired acceleration (xdotdot, ydotdot, zdotdot)
-    desThr = np.zeros(3)    # Desired thrust in N-E-D directions (or E-N-U, if selected)
-    desEul = np.zeros(3)    # Desired orientation in the world frame (phi, theta, psi)
-    desPQR = np.zeros(3)    # Desired angular velocity in the body frame (p, q, r)
-    desYawRate = desired['yaw_rate']         # Desired yaw speed
-    sDes = np.hstack((desPos, desVel, desAcc, desThr, desEul, desPQR, desYawRate)).astype(float)
 
     # Generate Commands (for next iteration)
     # ---------------------------
-    ctrl.controller(quad=quad, sDes=sDes, Ts=Ts)
+    ctrl.controller(quad=quad, sDes=traj.sDes, Ts=Ts, traj=traj)
 
     return t
 ############################################################################################################################
 
 def main():
-    if REAL_TIME_SIMULATION:
+    if REAL_TIME:
         sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
         next_loop_time = time.monotonic()
         while True:
@@ -736,7 +728,7 @@ def main():
             if sleep_duration > 0:
                 time.sleep(sleep_duration)
             
-            next_loop_time += 0.01
+            next_loop_time += 0.010
             
             startTime = time.monotonic()
             sysMgr.sys_manager_step()
@@ -744,13 +736,15 @@ def main():
             # print("Computation Time",endTime-startTime)
     else:
         sysMgr = System_Manager(log_dir='../logs/', config_dir='config/', currentTime=0)
-        sys.path.append(os.path.join(os.path.dirname(__file__), 'QuadSim'))
-        from QuadSim.quadFiles.quad import Quadcopter
-        from QuadSim.trajectory import Trajectory
-        from QuadSim.ctrl import Control
-        from QuadSim.utils.windModel import Wind
-        from QuadSim.utils.display import makeFigures
-        from QuadSim.utils.animation import sameAxisAnimation
+        # Add the Simulation directory to the path (relative to this file's location)
+        simulation_path = os.path.join(os.path.dirname(__file__), 'Quadcopter_SimCon', 'Simulation')
+        sys.path.append(simulation_path)
+        from quadFiles.quad import Quadcopter
+        from trajectory import Trajectory
+        from ctrl import Control, ControlType
+        from utils.windModel import Wind
+        from utils.display import makeFigures
+        from utils.animation import sameAxisAnimation
         start_time = time.time()
     
         # Simulation Setup
@@ -760,7 +754,7 @@ def main():
         Ts = 0.01
         control_dt = 0.1
         
-        Tf = 40
+        Tf = 150
         ifsave = 0
     
         # Choose trajectory settings
@@ -770,7 +764,7 @@ def main():
         # Initialize Quadcopter, Controller, Wind, Result Matrixes
         # ---------------------------
         quad = Quadcopter(Ti)
-        traj = Trajectory(quad, "xy_vel_z_pos", trajSelect)
+        traj = Trajectory(quad, trajSelect=trajSelect, ctrlType=ControlType.XY_VEL_Z_POS)
         ctrl = Control(quad, traj.yawType)
         wind = Wind('None', 2.0, 90, -15)
         
@@ -817,8 +811,11 @@ def main():
 
             desired['vel'] = msg['velCmd']
             desired['yaw_rate'] = msg['yawRateCmd']
+            traj.desiredState(t=globalTime, Ts=Ts, quad=quad, desired=desired)
+            # if globalTime > 5:
+            #     pass
             for ind in range(int(control_dt/Ts)):
-                quad_sim(t=globalTime+ind*Ts, Ts=Ts, quad=quad, ctrl=ctrl, wind=wind, desired=desired)
+                quad_sim(t=globalTime+ind*Ts, Ts=Ts, quad=quad, ctrl=ctrl, wind=wind, traj=traj)
             globalTime += control_dt
             
             i += 1           

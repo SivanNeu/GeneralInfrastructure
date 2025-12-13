@@ -20,6 +20,8 @@ from QuadSim.quadFiles.quad import Quadcopter
 from QuadSim.trajectory import Trajectory
 from QuadSim.ctrl import Control
 from QuadSim.utils.windModel import Wind
+from QuadSim.utils.display import makeFigures
+from QuadSim.utils.animation import sameAxisAnimation
 
 pubTopicsList = [
                [zmqTopics.topicMavlinkFlightData],
@@ -32,7 +34,7 @@ for topic in pubTopicsList:
 
 subSock = zmqWrapper.subscribe([zmqTopics.topicGuidenceCmdAttitude, 
                                 zmqTopics.topicGuidenceCmdVelNed,
-                                zmqTopics.topicGuidenceCmdVelBodyYawRate,
+                                zmqTopics.topicGuidenceCmdVelBody,
                                 # zmqTopics.topicGuidenceCmdTakeoff,
                                 # zmqTopics.topicGuidenceCmdLand,
                                 zmqTopics.topicGuidanceCmdArm,
@@ -93,48 +95,58 @@ def getFlightData(quad):
     return flight_Data
 
 ################################################################################################################
-def listenerToCommands():
+def listenerToCommands(traj, quad):
     ret = zmq.select([subSock], [], [], timeout=0.001)
     # ret = ret[0]
     if ret[0] is None or len(ret[0]) == 0:
-        return
+        return traj
     data = subSock.recv_multipart()
     topic = data[0]
     data = pickle.loads(data[1])
     
-    if topic == zmqTopics.topicGuidenceCmdAttitude:                           # mavlink ATTITUDE
-        msg = pickle.loads(data[1])
-        targetQuat = Quaternion(x=msg['quatNedDesBodyFrdCmd'][1], y=msg['quatNedDesBodyFrdCmd'][2], z=msg['quatNedDesBodyFrdCmd'][3], w=msg['quatNedDesBodyFrdCmd'][0])
-        rpyRateCmd = Rate_Cmd(roll=msg['rpyRateCmd'][0], pitch=msg['rpyRateCmd'][1], yaw=msg['rpyRateCmd'][2])
-        thrustCmd = msg['thrustCmd']
-        self._send_goal_attitude(targetQuat, rpyRateCmd, thrustCmd)
-        
-    elif topic == zmqTopics.topicGuidenceCmdVelNed:     
-        yawCmd = data['yawCmd']
-        velCmd = data['velCmd']
-        self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=None)
-        
-    elif topic == zmqTopics.topicGuidenceCmdVelBodyYawRate:     
-        yawRateCmd = data['yawRateCmd']
-        velCmd = flight_Data.quat_ned_bodyfrd.rotate_vec(data['velCmd'])
-        # velCmd[2] = 0.0
-        self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=None, yaw_rate=yawRateCmd)
-        
-    elif topic == zmqTopics.topicGuidenceCmdAccYaw:
-        yawCmd = data['yawCmd']
-        accCmd = data['accCmd']
-        self._send_setpoint(pos=None, vel=None, acc=accCmd, yaw=yawCmd, yaw_rate=None)
-        
-    elif topic == zmqTopics.topicGuidenceCmdAttitude:
+    if topic == zmqTopics.topicGuidenceCmdAttitude:
         targetQuat = Quaternion(x=data['quatNedDesBodyFrdCmd'][1], y=data['quatNedDesBodyFrdCmd'][2], z=data['quatNedDesBodyFrdCmd'][3], w=data['quatNedDesBodyFrdCmd'][0])
         rpyRateCmd = Rate_Cmd(roll=data['rpyRateCmd'][0], pitch=data['rpyRateCmd'][1], yaw=data['rpyRateCmd'][2])
         thrustCmd = data['thrustCmd']
         isRate = data['isRate']
+        traj.desThr = thrustCmd
         if isRate:
-            self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=None, rates=rpyRateCmd)
+            traj.desEul = rpyRateCmd.to_euler()
         else:
-            self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=targetQuat, rates=None)
-                    
+            traj.desEul = targetQuat.to_euler()
+        
+    elif topic == zmqTopics.topicGuidenceCmdVelNed:     
+        yawCmd = data['yawCmd']
+        yawRateCmd = data['yawRateCmd'] 
+        velCmd = data['velCmd']
+        
+        traj.desVel = velCmd
+        traj.desYawRate = yawRateCmd if not np.isnan(yawRateCmd) else np.nan
+        traj.desEul = np.array([np.nan, np.nan, yawCmd]) if not np.isnan(yawCmd) else np.array([np.nan, np.nan, np.nan])
+        traj.desPos = np.array([np.nan, np.nan, np.nan])
+        
+    elif topic == zmqTopics.topicGuidenceCmdVelBody:     
+        yawCmd = data['yawCmd'] 
+        yawRateCmd = data['yawRateCmd']
+        dcm_ned_bodyfrd=quad.quat.to_dcm()
+        velCmd = (dcm_ned_bodyfrd.T)@(data['velCmd'])
+        # velCmd[2] = 0.0
+        traj.desVel = velCmd
+        traj.desYawRate = yawRateCmd if not np.isnan(yawRateCmd) else np.nan
+        traj.desEul = np.array([np.nan, np.nan, yawCmd]) if not np.isnan(yawCmd) else np.array([np.nan, np.nan, np.nan])
+        traj.desPos = np.array([np.nan, np.nan, np.nan])
+        
+    elif topic == zmqTopics.topicGuidenceCmdAcc:
+        yawCmd = data['yawCmd'] 
+        yawRateCmd = data['yawRateCmd']
+        accCmd = data['accCmd']
+        traj.desAcc = accCmd
+        traj.desYawRate = yawRateCmd if not np.isnan(yawRateCmd) else np.nan
+        traj.desEul = np.array([np.nan, np.nan, yawCmd]) if not np.isnan(yawCmd) else np.array([np.nan, np.nan, np.nan])
+        traj.desPos = np.array([np.nan, np.nan, np.nan])
+        traj.desVel = np.array([np.nan, np.nan, np.nan])
+    return traj
+                      
 
 ############################################################################################################################
 def quad_sim(t, Ts, quad, ctrl, wind, traj):
@@ -146,11 +158,21 @@ def quad_sim(t, Ts, quad, ctrl, wind, traj):
 
     # Trajectory for Desired States 
     # ---------------------------
-    sDes = traj.desiredState(t, Ts, quad)        
+    desPos = traj.desPos      # Desired position (x, y, z)
+    
+    desVel = traj.desVel      # Desired velocity (xdot, ydot, zdot)
+       
+    desAcc = traj.desAcc      # Desired acceleration (xdotdot, ydotdot, zdotdot)
+    
+    desThr = traj.desThr      # Desired thrust in N-E-D directions (or E-N-U, if selected)
+    desEul = traj.desEul      # Desired orientation in the world frame (phi, theta, psi)
+    desPQR = traj.desPQR      # Desired angular velocity in the body frame (p, q, r)
+    desYawRate = traj.desYawRate         # Desired yaw speed
+    sDes = np.hstack((desPos, desVel, desAcc, desThr, desEul, desPQR, desYawRate)).astype(float)
 
     # Generate Commands (for next iteration)
     # ---------------------------
-    ctrl.controller(traj, quad, sDes, Ts)
+    ctrl.controller(quad=quad, sDes=sDes, Ts=Ts)
 
     return t
 
@@ -167,7 +189,7 @@ def main():
     # --------------------------- 
     Ti = 0
     Ts = 0.002
-    Tf = 40
+    Tf = 10
     ifsave = 0
  
     # Choose trajectory settings
@@ -236,7 +258,9 @@ def main():
     printDt = 1/printFreq
     printTime = current_ts+printDt
     logTime = current_ts+logDT
-    while(1):
+    globalTime = 0
+    while(globalTime<Tf):
+        start_time = time.monotonic()
         flight_Data = getFlightData(quad)
         if(time.monotonic() > outTime):
             outTime = time.monotonic()+outDT
@@ -245,9 +269,12 @@ def main():
         if(time.monotonic() > printTime):
             printTime = time.monotonic()+printDt
             print("timestamp: ", flight_Data.timestamp)
-        listenerToCommands()
-        
-        t = quad_sim(t, Ts, quad, ctrl, wind, traj)
+        traj = listenerToCommands(traj=traj, quad=quad)
+
+        if np.linalg.norm(traj.desVel) > 0.01:
+            pass
+      # for ind in range(int(control_dt/Ts)):
+        quad_sim(t=0, Ts=Ts, quad=quad, ctrl=ctrl, wind=wind, traj=traj)
         
         # print("{:.3f}".format(t))
         if(time.monotonic() > logTime):
@@ -264,12 +291,16 @@ def main():
             w_cmd_all[i,:]       = ctrl.w_cmd
             wMotor_all[i,:]      = quad.wMotor
             thr_all[i,:]         = quad.thr
-            tor_all[i,:]         = quad.tor
-        
-        i += 1
+            tor_all[i,:]         = quad.tor       
+            i += 1
+        end_time = time.monotonic()
+        # print("Time taken: {:.6f}s".format(end_time - start_time))
   
-        time.sleep(.0001)
-    
+        if Ts-(end_time-start_time) > 0:
+            time.sleep(Ts-(end_time-start_time))
+        else:
+            Ts = end_time-start_time
+        globalTime += Ts
   
     end_time = time.time()
     print("Simulated {:.2f}s in {:.6f}s.".format(t, end_time - start_time))
@@ -278,7 +309,9 @@ def main():
     # ---------------------------
 
     # utils.fullprint(sDes_traj_all[:,3:6])
-    utils.makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all)
+    makeFigures(quad.params, t_all, pos_all, vel_all, quat_all, omega_all, euler_all, w_cmd_all, wMotor_all, thr_all, tor_all, sDes_traj_all, sDes_calc_all)
+    ani = sameAxisAnimation(t_all, traj.wps, pos_all, quat_all, sDes_traj_all, Ts, quad.params, traj.xyzType, traj.yawType, ifsave)
+    plt.show()
     
     
     plt.figure(2)

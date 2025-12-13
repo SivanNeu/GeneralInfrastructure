@@ -51,9 +51,18 @@ class VelocityRLController:
         # sf_enjoy = SF_Enjoy_main()
         # self.sf_policy = sf_enjoy.enjoy
         
-        self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/gazebo_quad_no_int/checkpoint_p0/best_000001173_1201152_reward_295.335.pth')
-        self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path='./train_dir/relu_yaw/checkpoint_p0/best_000009767_10001408_reward_7754.513.pth')
+        rlFilePathVfVr = './train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth'
+        rlFilePathOmegaYaw = './train_dir/rlcat_yaw/checkpoint_p0/best_000000441_451584_reward_-76.342.pth'
+        print("Loading RL policy from: "+rlFilePathVfVr)
+        print("Loading RL policy from: "+rlFilePathOmegaYaw)
+        time.sleep(0.5)
+        # self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/gazebo_quad_no_int/checkpoint_p0/best_000001173_1201152_reward_295.335.pth')
+        # self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path='./train_dir/yaw_quad_tan_reward/checkpoint_p0/best_000005102_5224448_reward_324571.330.pth')
+        # self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/rlcat_quad_int/checkpoint_p0/best_000002056_2105344_reward_124.010.pth')
         
+        self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path=rlFilePathVfVr)
+        self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path=rlFilePathOmegaYaw)
+       
 ###############################################################################################################
     def getCommand(self, currentBodyState, desiredBodyState, controlType=None, currentData=None):
                
@@ -64,7 +73,14 @@ class VelocityRLController:
         self.pos_target, self.vel_target, _, _, _ = desiredBodyState[0]
         self.heading_target, _, _= desiredBodyState[1]; self.heading_target = self.heading_target/np.linalg.norm(self.heading_target)
         
-        heading_error = np.arctan2(self.heading_target[1], self.heading_target[0])
+        # Heading Observation
+        curHeading= quat_ned_bodyfrd.rotate_vec(np.array([1, 0, 0]))
+        # Compute signed angle: use z-component of cross product for sign
+        cross = np.cross(curHeading, self.heading_target)
+        cross_z = cross[2]  # z-component determines direction (positive = counterclockwise)
+        dot = np.dot(curHeading, self.heading_target)
+        theta = np.arctan2(cross_z, dot)  # Signed angle in [-pi, pi]
+        obsHeading = np.array([theta, gyro_bodyfrd[2]], dtype=np.float32)
         
         if currentData is not None:
             self.yaw=currentData.rpy[2]
@@ -86,7 +102,6 @@ class VelocityRLController:
         self.lastTime = self.current_time
         
         obsXY = np.array([pos_error_ned[0], pos_error_ned[1], vel_error_ned[0], vel_error_ned[1]], dtype=np.float32)
-        obsHeading = np.array([[np.sin(-heading_error), np.cos(-heading_error), gyro_bodyfrd[2]]],dtype=np.float32)
         # obs = np.concatenate([obsXY[0], obsHeading[0]], dtype=np.float32)
         
         ## execute policy inference
