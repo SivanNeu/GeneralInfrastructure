@@ -1,6 +1,6 @@
 from matrix_utils import hat, vee, deriv_unit_vector, saturate
 from integral_utils import IntegralError, IntegralErrorVec3
-from common import CONTROLLER_TYPE
+from common import CONTROLLER_TYPE, YAW_COMMAND_TYPE
 
 import time
 import numpy as np
@@ -26,14 +26,20 @@ class VelocityPIDControllerParameters:
         self.sat_sigmaX = 3
         self.sat_sigmaV = 3
         
+        self.keYaw = 1.0
+        self.keYawRate = 0.01
+        self.keYawIntegral = 1.0*0
+        self.sat_sigmaYaw = 3
+        
 ###############################################################################################################
 class VelocityPIDController:
 
-    def __init__(self, mass, currentTime=None):
+    def __init__(self, mass, currentTime=None, yawCommandType=YAW_COMMAND_TYPE.NONE):
 
         self.controllerName = "VelocityPID"
         self.controllerType = CONTROLLER_TYPE.VELOCITYPID
         
+        self.yawCommandType = yawCommandType 
         self.t0 = time.monotonic() if currentTime is None else currentTime
         self.t = 0.0
         self.t_pre = 0.0
@@ -54,6 +60,11 @@ class VelocityPIDController:
         # Integral errors
         self.eIX = IntegralErrorVec3()  # Position integral error
         self.eIV = IntegralErrorVec3()  # Velocity integral error
+        
+        self.eYaw = 0.0
+        self.prev_eYaw = None
+        self.eYawRate = 0.0
+        self.eYawIntegral = 0.0
 
         # derivative errors
         self.eDV = np.zeros(3)      # Derivative of velocity error
@@ -105,7 +116,19 @@ class VelocityPIDController:
                             
 
         self.A = velocity_command
-        return velocity_command, np.eye(3), np.zeros(3)
+        
+        yaw_command = 0.0
+        if self.yawCommandType == YAW_COMMAND_TYPE.RATE:
+            b1d_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(b1d)
+            self.eYaw = np.arctan2(b1d_bodyfrd[1], b1d_bodyfrd[0])
+            self.eYawRate = (self.eYaw - self.prev_eYaw) / self.dt if self.prev_eYaw is not None and self.dt > 0.0 else 0.0
+            self.prev_eYaw = self.eYaw  
+            self.eYawIntegral += self.eYaw * self.dt
+            self.eYawIntegral = np.clip(self.eYawIntegral, -self.param.sat_sigmaYaw, self.param.sat_sigmaYaw)
+            yaw_command = self.param.keYaw * self.eYaw + self.param.keYawRate * self.eYawRate + self.param.keYawIntegral * self.eYawIntegral
+            
+ # f_total or desired velocity, R_desired, Omega_desired_frd 
+        return velocity_command, np.eye(3), np.array([0.0, 0.0, yaw_command])
 ###############################################################################################################
 
     def update_current_time(self, currentTime):

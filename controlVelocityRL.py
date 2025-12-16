@@ -1,12 +1,12 @@
 import time
 import numpy as np
-import torch
+# import torch
 from common import CONTROLLER_TYPE
 from rl_policyClean import RLPolicyClean
 from copy import deepcopy
 from common import PX4_FLIGHT_STATE
 
-from SF_Enjoy import SF_Enjoy_main
+# from SF_Enjoy import SF_Enjoy_main
 
 from math import sin, cos, pi, sqrt, atan2
 
@@ -37,7 +37,7 @@ class VelocityRLController:
         self.max_range = 15
         self.int_scale = self.max_range * 20  # 20sec
 
-        self.max_omega = np.deg2rad(30)
+        self.max_omega = np.deg2rad(90)
         
         self.ringLen = 1
         self.ringV = np.zeros((2,self.ringLen))
@@ -120,11 +120,13 @@ class VelocityRLController:
         vr = np.clip(vr_,-self.max_vel,self.max_vel)
 
         w  = rl_action_logitsOmegaYaw.detach().numpy()[0][0]
+        w = np.clip(w,-self.max_omega,self.max_omega)
         ## vectorize and send outputs
         vel_vector = np.array([vf,vr,0]) # in FRD
         omega_vector = np.array([0,0,w])
         # print("velocity  "+str(vf)+" "+str(vr)+"  omega "+str(w))
-        return vel_vector, np.eye(3), omega_vector, obsXY
+        obsTotal = np.concatenate([obsXY, obsHeading])
+        return vel_vector, np.eye(3), omega_vector, obsTotal
 
     def resetIntegralErrorTerms(self):
         pass

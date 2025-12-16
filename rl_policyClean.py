@@ -1,6 +1,49 @@
 import sys
-import torch
-import torch.nn as nn
+# Fix for Raspberry Pi Zero: disable SVE detection to avoid prctl(PR_SVE_GET_VL) error
+import os
+# Force disable SVE detection before any imports
+os.environ['CPUINFO_DISABLE_SVE'] = '1'
+# Suppress cpuinfo errors by redirecting stderr during torch import
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*cpuinfo.*')
+warnings.filterwarnings('ignore', message='.*prctl.*')
+
+# Redirect stderr at file descriptor level to suppress cpuinfo error messages
+# This catches errors from C extensions that write directly to fd 2
+_saved_stderr_fd = None
+_devnull_fd = None
+_original_stderr = None
+_original_stderr_fd = None
+try:
+    _original_stderr_fd = sys.stderr.fileno()
+    # Save a copy of the original stderr fd
+    _saved_stderr_fd = os.dup(_original_stderr_fd)
+    # Open /dev/null
+    _devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    # Redirect stderr to /dev/null
+    os.dup2(_devnull_fd, _original_stderr_fd)
+except (AttributeError, OSError):
+    # Fallback to Python-level redirection if fd manipulation fails
+    _original_stderr = sys.stderr
+    sys.stderr = open(os.devnull, 'w')
+
+try:
+    import torch
+    import torch.nn as nn
+finally:
+    # Restore stderr
+    try:
+        if _saved_stderr_fd is not None and _original_stderr_fd is not None:
+            # Restore original stderr
+            os.dup2(_saved_stderr_fd, _original_stderr_fd)
+            os.close(_saved_stderr_fd)
+            if _devnull_fd is not None:
+                os.close(_devnull_fd)
+        elif _original_stderr is not None:
+            sys.stderr.close()
+            sys.stderr = _original_stderr
+    except Exception:
+        pass  # Ignore errors during cleanup
 
 # Ensure we can import Sample Factory utilities if needed
 sys.path.insert(0, 'sample-factory')

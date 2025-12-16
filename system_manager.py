@@ -1,4 +1,13 @@
 #!/bin/python3
+# Fix for Raspberry Pi Zero: disable SVE detection to avoid prctl(PR_SVE_GET_VL) error
+import os
+import sys
+# Force disable SVE detection before any imports
+os.environ['CPUINFO_DISABLE_SVE'] = '1'
+# Suppress cpuinfo errors
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*cpuinfo.*')
+warnings.filterwarnings('ignore', message='.*prctl.*')
 import time
 #from hardware_adapter import Hardware_Adapter
 #from virtual_tracker import Virtual_Tracker
@@ -7,7 +16,6 @@ import numpy as np
 # from config_parser import Config_Parser
 from control import *
 # from tracker import Tracker
-import os
 import pymap3d
 # import cv2
 import sys
@@ -36,7 +44,7 @@ from controlVelocityRL import VelocityRLController
 #     import zmqTopics
 #     import zmqWrapper
 #     import mps
-REAL_TIME = True
+REAL_TIME = False
 class MISSION_TYPE(Enum):
     NONE = 0
     WAYPOINT = 1
@@ -92,27 +100,28 @@ class System_Manager():
         ##############################
         factor = 1
         self.referencePoint = np.array([ 0, 0, 0])
-        self.desiredHeadingDir_ned = np.array([0, 0, 0])
+        self.desiredHeadingDir_ned = np.array([1, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
         self.yawCommandFactor = 1        
-        self.maximalVelocity = 2*factor # m/s (horizontal)
+        self.maximalVelocity = 0.75*factor # m/s (horizontal)
         self.descentVelocity = 10
-        self.targetVelocity = 3
+        self.targetVelocity = 0.75
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 2*factor
+        self.circleRadius = 0.5*factor
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
+        self.yawCommandType = YAW_COMMAND_TYPE.RATE
         
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
             self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, currentTime=self._overall_start), maximalVelocity=self.maximalVelocity)
             # self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
             self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity, currentTime=self._overall_start)) 
         elif self.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, yawCommandType=self.yawCommandType), maximalVelocity=self.maximalVelocity)
             
         # self._control = Control(self._config_dir, self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=GeometricController(mass=self.dronemass))
@@ -314,22 +323,27 @@ class System_Manager():
             quat_ned_desbodyfrd_cmd = -quat_ned_desbodyfrd_cmd
         
         forward_dir_frd = quat_ned_bodyfrd.rotate_vec(np.array([1,0,0]))
-        yawCmd=np.arctan2(forward_dir_frd[1], forward_dir_frd[0])
-        if self.yawControlType == YAW_COMMAND.NO_CONTROL:
-            yawCmd = self._currentData.heading
-        else:
-            heading_dir_ned = self.heading_dir_ned 
-            yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
+        
+        yawCmd = np.nan;         yawCmdRate = np.nan
+        if self.yawCommandType == YAW_COMMAND_TYPE.ANGLE:
+            yawCmd=np.arctan2(forward_dir_frd[1], forward_dir_frd[0])
+            if self.yawControlType == YAW_COMMAND.NO_CONTROL:
+                yawCmd = self._currentData.heading
+            else:
+                heading_dir_ned = self.heading_dir_ned 
+                yawCmd = np.arctan2(heading_dir_ned[1], heading_dir_ned[0])
+        elif self.yawCommandType == YAW_COMMAND_TYPE.RATE:
+            yawCmdRate = rpyRate_cmd[2]
         
         if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':np.nan, }
+            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':np.nan, 'yawRateCmd':rpyRate_cmd[2]*self.yawCommandFactor}
+            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor}
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
-            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':np.nan, }
+            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, }
             self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAcc, pickle.dumps(msg)])
         else:
             msg = { 'ts': time.monotonic(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
@@ -349,7 +363,9 @@ class System_Manager():
             print('timestamp: ', self._currentData.timestamp, '--->referencePoint: %.3f %.3f %.3f, pos_ned:  %.3f %.3f %.3f '%( 
                 self.referencePoint[0], self.referencePoint[1], self.referencePoint[2],
                 pos_ned[0], pos_ned[1], pos_ned[2])+str(self.homingStage)+                
-                " Command: + %.3f %.3f %.3f"%(command[0], command[1], command[2])+" yawRateCmd: %.3f"%(yawCmd)+
+                " Command: + %.3f %.3f %.3f"%(command[0], command[1], command[2])+
+                " yawCmd: %.3f"%(yawCmd)+
+                " yawRateCmd: %.3f"%(rpyRate_cmd[2])+
                 " deltaPos_frd: %.3f %.3f %.3f"%(deltaPos_frd[0], deltaPos_frd[1], deltaPos_frd[2]))#+"   delta_frd"+str(deltaPos_frd))
             
             try:
@@ -711,7 +727,7 @@ def quad_sim(t, Ts, quad, ctrl, wind, traj):
 
     # Generate Commands (for next iteration)
     # ---------------------------
-    ctrl.controller(quad=quad, sDes=traj.sDes, Ts=Ts, traj=traj)
+    ctrl.controller(quad=quad, Ts=Ts, traj=traj)
 
     return t
 ############################################################################################################################
@@ -754,7 +770,7 @@ def main():
         Ts = 0.01
         control_dt = 0.1
         
-        Tf = 150
+        Tf = 20
         ifsave = 0
     
         # Choose trajectory settings

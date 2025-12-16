@@ -69,8 +69,9 @@ class Control():
         vehicle_data_parser = None
         # if(vehicle_config_file_name is not None):
         #     vehicle_data_parser = Config_Parser(path=os.path.join(config_dir,"vehicle", vehicle_config_file_name), save_copy=True, output_directory=log_directory)
-        if(vehicle_data_parser is None):
-            print("config init failed")            
+        # Config parsing is intentionally disabled (commented out above), so this is expected
+        # if(vehicle_data_parser is None):
+        #     print("config init failed")            
         
         self._min_thrust = 0.01
         self._max_thrust = 1
@@ -236,24 +237,27 @@ class Control():
                               gyro_ned, accel_ned, quat_ned_bodyfrd,
                               imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0]),
                               obs=None, modeID=0, timestamp=0):
-        if obs is None:
-            obs = np.zeros(4)
-
-        self._control_logger.log({"comp_time":time.monotonic(), "command/[0]":command[0], "command/[1]":command[1], "command/[2]":command[2], 
-                                  "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
-                                  "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
-                                  "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
-                                  "current_pos_ned/x":current_pos_ned[0], "current_pos_ned/y":current_pos_ned[1], "current_pos_ned/z":current_pos_ned[2],
-                                  "cur_vel_ned/x":cur_vel_ned[0], "cur_vel_ned/y":cur_vel_ned[1], "cur_vel_ned/z":cur_vel_ned[2],
-                                  "gyro_ned/x":gyro_ned[0], "gyro_ned/y":gyro_ned[1], "gyro_ned/z":gyro_ned[2],
-                                  "accel_ned/x":accel_ned[0], "accel_ned/y":accel_ned[1], "accel_ned/z":accel_ned[2],
-                                  "Omega_desired_frd/x":Omega_desired_frd[0], "Omega_desired_frd/y":Omega_desired_frd[1], "Omega_desired_frd/z":Omega_desired_frd[2],
-                                  "quat_ned_bodyfrd/x":quat_ned_bodyfrd.x, "quat_ned_bodyfrd/y":quat_ned_bodyfrd.y,
-                                  "quat_ned_bodyfrd/z":quat_ned_bodyfrd.z, "quat_ned_bodyfrd/w":quat_ned_bodyfrd.w,
-                                  "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
-                                  "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
-                                  "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
-                                  "obs/[0]":obs[0], "obs/[1]":obs[1], "obs/[2]":obs[2], "obs/[3]":obs[3]})
+        
+        logDict = {"comp_time":time.monotonic(), "command/[0]":command[0], "command/[1]":command[1], "command/[2]":command[2], 
+                    "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
+                    "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
+                    "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
+                    "current_pos_ned/x":current_pos_ned[0], "current_pos_ned/y":current_pos_ned[1], "current_pos_ned/z":current_pos_ned[2],
+                    "cur_vel_ned/x":cur_vel_ned[0], "cur_vel_ned/y":cur_vel_ned[1], "cur_vel_ned/z":cur_vel_ned[2],
+                    "gyro_ned/x":gyro_ned[0], "gyro_ned/y":gyro_ned[1], "gyro_ned/z":gyro_ned[2],
+                    "accel_ned/x":accel_ned[0], "accel_ned/y":accel_ned[1], "accel_ned/z":accel_ned[2],
+                    "Omega_desired_frd/x":Omega_desired_frd[0], "Omega_desired_frd/y":Omega_desired_frd[1], "Omega_desired_frd/z":Omega_desired_frd[2],
+                    "quat_ned_bodyfrd/x":quat_ned_bodyfrd.x, "quat_ned_bodyfrd/y":quat_ned_bodyfrd.y,
+                    "quat_ned_bodyfrd/z":quat_ned_bodyfrd.z, "quat_ned_bodyfrd/w":quat_ned_bodyfrd.w,
+                    "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
+                    "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
+                    "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
+                    }
+        if obs is not None:
+            for i in range(len(obs)):
+                logDict[f"obs/{i}"] = obs[i]
+            
+        self._control_logger.log(logDict)
 
 ###############################################################################################################
 ###############################################################################################################################################
