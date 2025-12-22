@@ -316,6 +316,7 @@ class Imu():
 #################################################################################################################
 class Flight_Data():
     def __init__(self):
+        self.message_count = 0
         self.quat_ts = 0
         self.quat_ned_bodyfrd = Quaternion(0,0,0,1)
         self.altitude_m = Altitude(0,0)

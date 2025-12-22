@@ -14,9 +14,9 @@ class VelocityPIDControllerParameters:
 
             # controller
         # Position gains
-        commonFactor = 1
+        commonFactor = 2
         self.kX = np.diag([1.0, 1.0, 1.0])*commonFactor  # Position gains
-        self.kV = np.diag([3.0, 3.0, 1.0])*commonFactor # Velocity gains
+        self.kV = np.diag([0.8, 0.8, 1.0])*commonFactor # Velocity gains
         # Integral gains
         self.kIX = np.diag([0, 0, 0])*commonFactor # Position integral gains
         self.kIV = np.diag([1, 1, 1])*0 # Velocity integral gains
@@ -90,7 +90,7 @@ class VelocityPIDController:
 
         kX = self.param.kX @ np.diag(pos_control)
         kIX = self.param.kIX @ np.diag(pos_control)
-        kV = self.param.kV @ np.diag(vel_control)
+        kV = self.param.kV @ np.diag(vel_control | pos_control)
         kIV = self.param.kIV @ np.diag(vel_control)
 
         self.update_current_time(currentTime=currentData.local_ts)

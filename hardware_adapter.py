@@ -16,6 +16,7 @@ from pymavlink import mavutil
 import multiprocessing
 from multiprocessing import  Lock
 from copy import deepcopy
+import threading
 
 import pymavlink
 
@@ -65,12 +66,8 @@ sockPub = zmqWrapper.publisher(zmqTopics.topicMavlinkPort) #TODO: change to pubT
 for topic in pubTopicsList:
     mpsDict[topic[0]] = mps.MPS(topic[0])
 
-subSock = zmqWrapper.subscribe([zmqTopics.topicGuidenceCmdAttitude, 
-                                zmqTopics.topicGuidenceCmdVelNed,
-                                zmqTopics.topicGuidenceCmdVelBody,
-                                zmqTopics.topicGuidenceCmdAcc,
-                                zmqTopics.topicGuidanceCmdArm,
-                                ], zmqTopics.topicGuidenceCmdPort)
+# Subscriber socket will be created in Hardware_Adapter.__init__ to ensure proper timing
+subSock = None
 
 
 #################################################################################################################
@@ -102,6 +99,10 @@ class Hardware_Adapter():
         self._current_airspeed = 0
         self._mavlink_logger = None #Logger("mavlink"+time.strftime("%Y%m%d_%H%M%S"), log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
 
+        # Initialize missing attributes
+        self._mavlink_connected_to_usb = False
+        self._disable_offboard_control = False
+
         success = self._init_mavlink()
         self._current_data = Flight_Data()
         self._init_success = True
@@ -110,10 +111,47 @@ class Hardware_Adapter():
             self._init_success = False
             print("mavlink failed to initialize")
             return
-        # self._thread_frequency_hz = 300
-    
-        # main_frame_proc = multiprocessing.Process(target=self._main, args={})
-        # main_frame_proc.start()
+        
+        # Thread synchronization
+        self._data_lock = threading.Lock()
+        self._running = True
+        
+        # Publishing frequency
+        self._publish_freq_hz = 500
+        self._publish_dt = 1.0 / self._publish_freq_hz
+        
+        # Create subscriber socket for commands (create here to ensure proper timing)
+        # Wait a bit to ensure system_manager's publisher has time to bind
+        time.sleep(0.2)
+        global subSock
+        # Create socket WITH CONFLATE for single-part messages (keeps only latest message)
+        subSock = zmqWrapper.context.socket(zmq.SUB)
+        subSock.setsockopt(zmq.CONFLATE, 1)  # Keep only latest message (works with single-part)
+        subSock.setsockopt(zmq.RCVTIMEO, 100)  # 100ms timeout
+        # Subscribe to all command topics BEFORE connecting (important for ZMQ PUB/SUB)
+        subSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicGuidenceCmdAttitude)
+        subSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicGuidenceCmdVelNed)
+        subSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicGuidenceCmdVelBody)
+        subSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicGuidenceCmdAcc)
+        subSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicGuidanceCmdArm)
+        # Connect AFTER subscribing (important for ZMQ PUB/SUB timing)
+        subSock.connect(f"tcp://127.0.0.1:{zmqTopics.topicGuidenceCmdPort}")
+        print(f"Hardware_adapter: Subscribed to commands on port: {zmqTopics.topicGuidenceCmdPort}")
+        print(f"  Topics: {[zmqTopics.topicGuidenceCmdAttitude, zmqTopics.topicGuidenceCmdVelNed, zmqTopics.topicGuidenceCmdVelBody, zmqTopics.topicGuidenceCmdAcc, zmqTopics.topicGuidanceCmdArm]}")
+        
+        # Give ZMQ publisher socket time to bind and be ready
+        # This prevents messages from being lost when subscribers connect
+        time.sleep(0.1)
+        
+        # Start threads
+        self._command_thread = threading.Thread(target=self._command_thread_func, daemon=True)
+        self._data_thread = threading.Thread(target=self._data_thread_func, daemon=True)
+        
+        self._command_thread.start()
+        self._data_thread.start()
+        
+        print("Hardware adapter threads started successfully")
+        print(f"Publishing to topic: {zmqTopics.topicMavlinkFlightData} on port: {zmqTopics.topicMavlinkPort}")
 
 #################################################################################################################
     def init_succeeded(self):
@@ -162,7 +200,7 @@ class Hardware_Adapter():
         
         if topic == zmqTopics.topicGuidenceCmdAttitude:
             targetQuat = Quaternion(x=data['quatNedDesBodyFrdCmd'][1], y=data['quatNedDesBodyFrdCmd'][2], z=data['quatNedDesBodyFrdCmd'][3], w=data['quatNedDesBodyFrdCmd'][0])
-            rpyRateCmd = Rate_Cmd(roll=data['rpyRateCmd'][0], pitch=data['rpyRateCmd'][1], yaw=data['rpyRateCmd'][2])
+            rpyRateCmd = Rate_Cmd(rpydot=np.array([data['rpyRateCmd'][0], data['rpyRateCmd'][1], data['rpyRateCmd'][2]]))
             thrustCmd = data['thrustCmd']
             isRate = data['isRate']
             if isRate:
@@ -609,27 +647,325 @@ class Hardware_Adapter():
         elif(key == 'HEARTBEAT'):
             pass
 
+#################################################################################################################
+    def _command_thread_func(self):
+        """
+        Thread function for handling commands from system_manager and sending them to mavlink.
+        This thread continuously listens for commands via ZMQ and forwards them to the mavlink server.
+        """
+        global subSock
+        
+        print("Hardware_adapter: Command thread started, waiting for commands...")
+        
+        # Wait for subscriber socket to be created
+        while subSock is None and self._running:
+            time.sleep(0.01)
+        
+        if subSock is None:
+            print("Error: Subscriber socket not created!")
+            return
+        
+        # Set socket to non-blocking
+        subSock.setsockopt(zmq.RCVTIMEO, 100)  # 100ms timeout
+        print(f"Hardware_adapter: Command thread ready, socket connected to port {zmqTopics.topicGuidenceCmdPort}")
+        
+        # Test connection by waiting a bit and checking if we can receive
+        print("Hardware_adapter: Waiting 1 second to test connection to system_manager...")
+        time.sleep(1.0)
+        test_receive_count = 0
+        for i in range(20):  # Check for 200ms
+            try:
+                test_msg = subSock.recv(zmq.NOBLOCK)  # Single-part message with topic prefix
+                # Check if message has a valid topic prefix
+                if (test_msg.startswith(zmqTopics.topicGuidenceCmdAttitude) or
+                    test_msg.startswith(zmqTopics.topicGuidenceCmdVelNed) or
+                    test_msg.startswith(zmqTopics.topicGuidenceCmdVelBody) or
+                    test_msg.startswith(zmqTopics.topicGuidenceCmdAcc) or
+                    test_msg.startswith(zmqTopics.topicGuidanceCmdArm)):
+                    test_receive_count += 1
+            except zmq.Again:
+                pass
+            except Exception as e:
+                print(f"Hardware_adapter: Error testing subscriber connection: {e}")
+                break
+            time.sleep(0.01)
+        
+        if test_receive_count > 0:
+            print(f"Hardware_adapter: SUCCESS - Received {test_receive_count} test messages from system_manager!")
+        else:
+            print(f"Hardware_adapter: WARNING - No messages received during connection test.")
+            print(f"  This means system_manager is either:")
+            print(f"    1. Not running")
+            print(f"    2. Not publishing commands yet")
+            print(f"    3. Publishing on a different port")
+            print(f"  Expected publisher port: {zmqTopics.topicGuidenceCmdPort}")
+        
+        last_debug_time = time.monotonic()
+        msg_count = 0
+        no_msg_warning_time = time.monotonic()
+        
+        while self._running:
+            try:
+                # Receive single-part message with topic prefix
+                try:
+                    msg = subSock.recv(zmq.NOBLOCK)
+                    # Reset warning timer if we received a message
+                    no_msg_warning_time = time.monotonic()
+                    
+                    # Debug: Print first message received to verify format
+                    if not hasattr(self, '_first_msg_received'):
+                        self._first_msg_received = True
+                        print(f"Hardware_adapter: First command message received! Length: {len(msg)} bytes")
+                        # Check topic prefix
+                        if msg.startswith(zmqTopics.topicGuidenceCmdVelNed):
+                            print(f"  Topic: {zmqTopics.topicGuidenceCmdVelNed}")
+                        elif msg.startswith(zmqTopics.topicGuidenceCmdAttitude):
+                            print(f"  Topic: {zmqTopics.topicGuidenceCmdAttitude}")
+                        elif msg.startswith(zmqTopics.topicGuidenceCmdAcc):
+                            print(f"  Topic: {zmqTopics.topicGuidenceCmdAcc}")
+                        else:
+                            print(f"  First 50 bytes: {msg[:50]}")
+                except zmq.Again:
+                    # No message available, continue
+                    # Warn if no messages received for 5 seconds
+                    if time.monotonic() - no_msg_warning_time > 5.0:
+                        print(f"Hardware_adapter: No commands received for 5s. Is system_manager sending? Port: {zmqTopics.topicGuidenceCmdPort}")
+                        no_msg_warning_time = time.monotonic()
+                    time.sleep(0.001)
+                    continue
+                except zmq.ZMQError as e:
+                    if e.errno == zmq.EAGAIN:
+                        time.sleep(0.001)
+                        continue
+                    else:
+                        print(f"ZMQ error in command thread: {e}")
+                        time.sleep(0.01)
+                        continue
+                
+                if msg is None or len(msg) == 0:
+                    print(f"Warning: Received empty message")
+                    continue
+                
+                # Extract topic from message prefix
+                topic = None
+                data_bytes = None
+                if msg.startswith(zmqTopics.topicGuidenceCmdAttitude):
+                    topic = zmqTopics.topicGuidenceCmdAttitude
+                    data_bytes = msg[len(zmqTopics.topicGuidenceCmdAttitude):]
+                elif msg.startswith(zmqTopics.topicGuidenceCmdVelNed):
+                    topic = zmqTopics.topicGuidenceCmdVelNed
+                    data_bytes = msg[len(zmqTopics.topicGuidenceCmdVelNed):]
+                elif msg.startswith(zmqTopics.topicGuidenceCmdVelBody):
+                    topic = zmqTopics.topicGuidenceCmdVelBody
+                    data_bytes = msg[len(zmqTopics.topicGuidenceCmdVelBody):]
+                elif msg.startswith(zmqTopics.topicGuidenceCmdAcc):
+                    topic = zmqTopics.topicGuidenceCmdAcc
+                    data_bytes = msg[len(zmqTopics.topicGuidenceCmdAcc):]
+                elif msg.startswith(zmqTopics.topicGuidanceCmdArm):
+                    topic = zmqTopics.topicGuidanceCmdArm
+                    data_bytes = msg[len(zmqTopics.topicGuidanceCmdArm):]
+                else:
+                    # Debug: print first few bytes to see what we received
+                    prefix_bytes = msg[:min(50, len(msg))]
+                    print(f"Warning: Received message with unknown topic prefix. First 50 bytes: {prefix_bytes}")
+                    print(f"  Expected topics: {[zmqTopics.topicGuidenceCmdAttitude, zmqTopics.topicGuidenceCmdVelNed, zmqTopics.topicGuidenceCmdVelBody, zmqTopics.topicGuidenceCmdAcc, zmqTopics.topicGuidanceCmdArm]}")
+                    continue
+                
+                try:
+                    data = pickle.loads(data_bytes)
+                except Exception as e:
+                    print(f"Error unpickling command data: {e}, topic: {topic}, data length: {len(data_bytes) if data_bytes else 0}")
+                    continue
+                
+                if data is None or (isinstance(data, dict) and len(data) == 0):
+                    print(f"Warning: Received empty command data for topic: {topic}")
+                    continue
+                
+                # Safely access optional message metadata (not all command types include these)
+                message_count = data.get('message_count', 0)
+                message_ts = data.get('message_ts', time.monotonic())
+                message_delay = time.monotonic() - message_ts
+                # print(f"Hardware_adapter: message count {message_count}, message delay {message_delay:.6f}")
+                msg_count += 1
+                
+                # Debug: Print received command info (only occasionally to avoid spam)
+                current_time = time.monotonic()
+                if current_time - last_debug_time > 2.0:  # Print every 2 seconds
+                    print(f"Hardware_adapter: Received {msg_count} commands in last 2s. Latest - Topic: {topic}, Data keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+                    if isinstance(data, dict) and 'velCmd' in data:
+                        print(f"  velCmd: {data['velCmd']}")
+                    msg_count = 0
+                    last_debug_time = current_time
+                
+                if topic == zmqTopics.topicGuidenceCmdAttitude:
+                    targetQuat = Quaternion(x=data['quatNedDesBodyFrdCmd'][1], y=data['quatNedDesBodyFrdCmd'][2], z=data['quatNedDesBodyFrdCmd'][3], w=data['quatNedDesBodyFrdCmd'][0])
+                    rpyRateCmd = Rate_Cmd(rpydot=np.array([data['rpyRateCmd'][0], data['rpyRateCmd'][1], data['rpyRateCmd'][2]]))
+                    thrustCmd = data['thrustCmd']
+                    isRate = data['isRate']
+                    if isRate:
+                        self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=None, rates=rpyRateCmd)
+                    else:
+                        self._send_goal_attitude(goal_thrust=thrustCmd, goal_attitude=targetQuat, rates=None)
+                    
+                elif topic == zmqTopics.topicGuidenceCmdVelNed:     
+                    if 'velCmd' not in data:
+                        print(f"Warning: velCmd missing in command data. Keys: {data.keys() if isinstance(data, dict) else 'not a dict'}")
+                        continue
+                    yawCmd = data.get('yawCmd', np.nan)
+                    yawCmd = yawCmd if not np.isnan(yawCmd) else None
+                    yawRateCmd = data.get('yawRateCmd', np.nan)
+                    yawRateCmd = yawRateCmd if not np.isnan(yawRateCmd) else None
+                    velCmd = data['velCmd']
+                    if velCmd is None or (isinstance(velCmd, np.ndarray) and velCmd.size == 0):
+                        print(f"Warning: Empty velCmd received: {velCmd}")
+                        continue
+                    if not isinstance(velCmd, (list, np.ndarray)) or len(velCmd) != 3:
+                        print(f"Warning: Invalid velCmd format. Expected array of length 3, got: {type(velCmd)}, length: {len(velCmd) if hasattr(velCmd, '__len__') else 'N/A'}")
+                        continue
+                    self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=yawRateCmd)
+                    
+                elif topic == zmqTopics.topicGuidenceCmdVelBody:     
+                    # Need to read current quaternion for rotation - use lock for thread safety
+                    with self._data_lock:
+                        if not self._current_data.gathered.get('quat_ned_bodyfrd', False):
+                            # Quaternion not yet available, skip this command
+                            continue
+                        current_quat = self._current_data.quat_ned_bodyfrd
+                    yawCmd = data['yawCmd'] if not np.isnan(data['yawCmd']) else None
+                    yawRateCmd = data['yawRateCmd'] if not np.isnan(data['yawRateCmd']) else None
+                    velCmd = current_quat.rotate_vec(data['velCmd'])
+                    self._send_setpoint(pos=None, vel=velCmd, acc=None, yaw=yawCmd, yaw_rate=yawRateCmd)
+                    
+                elif topic == zmqTopics.topicGuidenceCmdAcc:
+                    yawCmd = data['yawCmd'] if not np.isnan(data['yawCmd']) else None
+                    yawRateCmd = data['yawRateCmd'] if not np.isnan(data['yawRateCmd']) else None
+                    accCmd = data['accCmd']
+                    self._send_setpoint(pos=None, vel=None, acc=accCmd, yaw=yawCmd, yaw_rate=yawRateCmd)
+                    
+                elif topic == zmqTopics.topicGuidenceCmdTakeoff:
+                    takeoff_altitude = data.get('takeoff_altitude', 10)
+                    self._send_takeoff_cmd(takeoff_altitude)
+                    
+                elif topic == zmqTopics.topicGuidenceCmdLand:
+                    self._send_land_cmd()
+                    
+                elif topic == zmqTopics.topicGuidanceCmdArm:
+                    self._arm()
+                    
+            except Exception as e:
+                print(f"Error in command thread: {e}")
+                time.sleep(0.001)
+
+#################################################################################################################
+    def _data_thread_func(self):
+        """
+        Thread function for maintaining current_data structure and publishing to system_manager.
+        This thread continuously listens to mavlink messages, updates the current_data structure,
+        and publishes it via ZMQ to system_manager.
+        """
+        outTime = time.monotonic() + self._publish_dt
+        printTime = time.monotonic() + 1.0  # Print every second
+        
+        while self._running:
+            try:
+                current_time = time.monotonic()
+                
+                # Process mavlink messages (non-blocking)
+                msg = self.mavlink_connection.recv_match(blocking=False, timeout=0.0)
+                if msg is not None and msg.get_type() != "BAD_DATA":
+                    msg_dict = msg.to_dict()
+                    msg_dict['local-ts'] = current_time
+
+                    if 'time_boot_ms' in msg_dict.keys():
+                        pass
+                        
+                    if msg_dict['mavpackettype'] == 'HEARTBEAT':
+                        msg_dict['mode_string'] = mavutil.mode_string_v10(msg)
+                        
+                    if msg_dict['mavpackettype'] in RELEVANT_MAVLINK_MESSAGES:
+                        ind = RELEVANT_MAVLINK_MESSAGES.index(msg_dict['mavpackettype'])
+                        # Update data with lock for thread safety
+                        with self._data_lock:
+                            self.parse(msg_dict)
+                            # Apply filtering
+                            self._filter_data(self._current_data)
+                    
+                    # Handle mavlink logger
+                    with self._data_lock:
+                        if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:
+                            self._mavlink_logger = None
+                        elif self._mavlink_logger is None:
+                            self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
+                        
+                        if self._mavlink_logger is not None:
+                            self._mavlink_logger.log(str(msg_dict))
+                
+                # Publish data at specified frequency (independent of mavlink message arrival)
+                if current_time >= outTime:
+                    outTime = current_time + self._publish_dt
+                    with self._data_lock:
+                        self._current_data.local_ts = time.monotonic()
+                        data = pickle.dumps(self._current_data)
+                    try:
+                        # Send as single-part message with topic prefix to enable CONFLATE support
+                        # Topic prefix is needed for ZMQ subscription filtering, but it's still a single-part message
+                        sockPub.send(zmqTopics.topicMavlinkFlightData + data)
+                        self._current_data.message_count += 1
+                        # Debug: Track publishing rate
+                        if not hasattr(self, '_publish_count'):
+                            self._publish_count = 0
+                            self._last_publish_debug_time = current_time
+                        self._publish_count += 1
+                        if current_time - self._last_publish_debug_time > 2.0:
+                            print(f"Hardware_adapter: Published {self._publish_count} messages in last 2s to port {zmqTopics.topicMavlinkPort}")
+                            self._publish_count = 0
+                            self._last_publish_debug_time = current_time
+                    except Exception as e:
+                        print(f"Error publishing data: {e}")
+                
+                # Print status at lower frequency
+                if current_time >= printTime:
+                    printTime = current_time + 1.0
+                    with self._data_lock:
+                        print("timestamp: ", self._current_data.timestamp)
+                
+                # Small sleep to prevent CPU spinning
+                time.sleep(0.0001)
+                        
+            except Exception as e:
+                # print(f"Error in data thread: {e}")
+                time.sleep(0.001)
+
+#################################################################################################################
+    def stop(self):
+        """Stop both threads gracefully."""
+        self._running = False
+        if self._command_thread.is_alive():
+            self._command_thread.join(timeout=1.0)
+        if self._data_thread.is_alive():
+            self._data_thread.join(timeout=1.0)
+
+#################################################################################################################
 def main():
     hardware_adapter = Hardware_Adapter(log_dir='../logs/')
-    outFreq = 500
-    outDT = 1/outFreq
-    current_ts = time.monotonic()
-    outTime = current_ts+outDT
     
-    printFreq = 1
-    printDt = 1/printFreq
-    printTime = current_ts+printDt
-    while(1):
-        if(time.monotonic() > outTime):
-            outTime = time.monotonic()+outDT
-            data = pickle.dumps(hardware_adapter._current_data)
-            sockPub.send_multipart([zmqTopics.topicMavlinkFlightData, data])
-        if(time.monotonic() > printTime):
-            printTime = time.monotonic()+printDt
-            print("timestamp: ", hardware_adapter._current_data.timestamp)
-        hardware_adapter.listenerToMavlink()
-        hardware_adapter.listenerToCommands()
-        time.sleep(.0001)
+    if not hardware_adapter.init_succeeded():
+        print("Hardware adapter initialization failed. Exiting.")
+        return
+    
+    print("Hardware adapter started with two threads:")
+    print("  - Command thread: handling commands from system_manager to mavlink")
+    print("  - Data thread: maintaining current_data and publishing to system_manager")
+    
+    try:
+        # Main loop just keeps the process alive
+        # The threads handle all the work asynchronously
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down hardware adapter...")
+        hardware_adapter.stop()
+        print("Hardware adapter stopped.")
 
 if __name__ == '__main__':
     main()

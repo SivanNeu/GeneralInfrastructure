@@ -192,7 +192,7 @@ class Control():
                               current_pos_ned=self._current_pos_ned, cur_vel_ned=self._current_vel_ned, 
                               gyro_ned=gyro_ned, accel_ned=accel_ned, quat_ned_bodyfrd=quat_ned_bodyfrd,
                               est_tar_pos_ned=estimated_tar_pos_ned, vel_des_ned=vel_des_ned, imu_ts=imu_ts, dt=step_dt, current_ts=current_ts, counter=counter, 
-                              obs=obs, modeID=currentData.custom_mode_id, timestamp=currentData.timestamp)
+                              obs=obs, modeID=currentData.custom_mode_id, timestamp=currentData.timestamp/1000)
         
         return command, rpyRate_cmd, quat_ned_desbodyfrd
        
@@ -238,7 +238,7 @@ class Control():
                               imu_ts, dt, current_ts, counter, est_tar_pos_ned = np.array([0,0,0]), vel_des_ned = np.array([0,0,0]),
                               obs=None, modeID=0, timestamp=0):
         
-        logDict = {"comp_time":time.monotonic(), "command/[0]":command[0], "command/[1]":command[1], "command/[2]":command[2], 
+        logDict = {"timestamp":timestamp, "comp_time":time.monotonic(), "command/[0]":command[0], "command/[1]":command[1], "command/[2]":command[2], 
                     "rate_cmd/roll":rpy_rate_cmd[0], "rate_cmd/pitch":rpy_rate_cmd[1], "rate_cmd/yaw":rpy_rate_cmd[2],
                     "quat_ned_desbodyfrd_cmd/x":quat_ned_desbodyfrd_cmd.x, "quat_ned_desbodyfrd_cmd/y":quat_ned_desbodyfrd_cmd.y,
                     "quat_ned_desbodyfrd_cmd/z":quat_ned_desbodyfrd_cmd.z, "quat_ned_desbodyfrd_cmd/w":quat_ned_desbodyfrd_cmd.w,
@@ -251,7 +251,7 @@ class Control():
                     "quat_ned_bodyfrd/z":quat_ned_bodyfrd.z, "quat_ned_bodyfrd/w":quat_ned_bodyfrd.w,
                     "est_tar_pos_ned/x":est_tar_pos_ned[0], "est_tar_pos_ned/y":est_tar_pos_ned[1], "est_tar_pos_ned/z":est_tar_pos_ned[2],
                     "vel_des_ned/x":vel_des_ned[0], "vel_des_ned/y":vel_des_ned[1], "vel_des_ned/z":vel_des_ned[2],
-                    "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, "timestamp":timestamp,
+                    "imu_ts":imu_ts, "dt":dt, "current_ts":current_ts, "counter":counter, "modeID":modeID, 
                     }
         if obs is not None:
             for i in range(len(obs)):

@@ -60,20 +60,16 @@ GPS_SEARCH_TIMEOUT_SEC = 3
 #################################################################################################################
 class System_Manager():
     def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False, currentTime=None):
+        print("System_Manager: Initializing...")
         self._overall_start = time.monotonic() if currentTime is None else currentTime
         self._config_dir = config_dir
         self._log_dir = log_dir
-        self._finished = False
-        self._target_threshold_m = 5
-        self._target_received = False
-        self._prev_imu_timestamp = 0
         self._prev_los_ned_dir = np.zeros(3)
         self._prev_pos_ned = np.zeros(3)
         self._prev_imu_ts = 0
         self._prev_ts = self._overall_start
-        self._tracker_pos_px = None
-        self._init_pos_lla_deg = None
-        self._ai1Kestimates = None
+
+        self.message_count = 0
         # vehicle_config_path = self._get_vehicle_config_file(self._config_dir)
         self._input_logger = None #Logger("input"+time.strftime("%Y%m%d_%H%M%S"), self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
         # vehicle_data_parser = Config_Parser(path=vehicle_config_path)
@@ -90,7 +86,7 @@ class System_Manager():
         self.holdonPos_ned = None
         self.holdonTime = None       
         self.yawDefinedDir_ned = None   
-        self.homingStage = HOMING_STAGE.NONE     
+        self.homingStage = HOMING_STAGE.NONE      
 
         self.pointIndex = 0
         self.offboardEntry = False
@@ -98,21 +94,21 @@ class System_Manager():
         ##############################
         # start scenario definitions #
         ##############################
-        factor = 1
-        self.referencePoint = np.array([ 0, 0, 0])
-        self.desiredHeadingDir_ned = np.array([-1, -1, 0])
+        factor = 10
+        self.referencePoint = np.array([ 10, 0, 0])
+        self.desiredHeadingDir_ned = np.array([1, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
         self.yawCommandFactor = 1        
         self.maximalVelocity = 0.75*factor # m/s (horizontal)
         self.descentVelocity = 10
-        self.targetVelocity = 0.75
+        self.targetVelocity = 0.75*10
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 0.5*factor
+        self.circleRadius = 5*factor
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         self.yawCommandType = YAW_COMMAND_TYPE.RATE
         
@@ -135,11 +131,56 @@ class System_Manager():
         # end of scenario definitions #
         ###############################
         
-        self.subsSock = zmqWrapper.subscribe( topics=[ zmqTopics.topicMavlinkFlightData ], port=zmqTopics.topicMavlinkPort )
+        # Create persistent subscription socket for flight data
+        # Use CONFLATE to keep only the latest message (now that we use single-part messages)
+        self.subsSock = zmqWrapper.context.socket(zmq.SUB)
+        self.subsSock.setsockopt(zmq.CONFLATE, 1)  # Keep only latest message (works with single-part)
+        # Set receive timeout
+        self.subsSock.setsockopt(zmq.RCVTIMEO, 100)  # 100ms timeout
+        self.subsSock.connect(f"tcp://127.0.0.1:{zmqTopics.topicMavlinkPort}")
+        self.subsSock.setsockopt(zmq.SUBSCRIBE, zmqTopics.topicMavlinkFlightData)
+        print(f"System_Manager: Subscribed to topic: {zmqTopics.topicMavlinkFlightData} on port: {zmqTopics.topicMavlinkPort}")
+        # Give socket time to connect (important for ZMQ PUB/SUB pattern)
+        # NOTE: In ZMQ PUB/SUB, the publisher should bind BEFORE the subscriber connects
+        # If hardware_adapter starts after system_manager, some initial messages may be lost
+        time.sleep(0.2)
 
         self._currentData = Flight_Data()
         self.trackData = None
         self.pubSock = zmqWrapper.publisher(zmqTopics.topicGuidenceCmdPort)
+        print(f"System_Manager: Publishing commands on port: {zmqTopics.topicGuidenceCmdPort}")
+        # Give publisher time to bind
+        time.sleep(0.1)
+        
+        # Send a test message to verify connection
+        try:
+            test_msg = {'ts': time.monotonic(), 'velCmd': [0.0, 0.0, 0.0], 'yawCmd': 0.0, 'yawRateCmd': 0.0}
+            # Send as single-part message with topic prefix
+            self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(test_msg))
+            print(f"System_Manager: Sent test command message to verify connection")
+        except Exception as e:
+            print(f"System_Manager: ERROR - Failed to send test command: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Test receiving a message (wait a bit for hardware_adapter to start publishing)
+        print("System_Manager: Testing subscriber connection...")
+        time.sleep(0.5)  # Give hardware_adapter time to start publishing
+        test_receive_count = 0
+        for i in range(10):
+            try:
+                test_msg = self.subsSock.recv(zmq.NOBLOCK)  # Single-part message with topic prefix
+                if test_msg.startswith(zmqTopics.topicMavlinkFlightData):
+                    test_receive_count += 1
+            except zmq.Again:
+                pass
+            except Exception as e:
+                print(f"System_Manager: Error testing subscriber: {e}")
+                break
+        if test_receive_count > 0:
+            print(f"System_Manager: Successfully received {test_receive_count} test messages from hardware_adapter!")
+        else:
+            print(f"System_Manager: WARNING - No messages received during test. Is hardware_adapter publishing?")
 
         ##self._control.reset(thrust=self._hardware_adapter.get_current_thrust(), yaw=self._hardware_adapter.get_current_yaw())
         self._current_pos_lla = LLA(timestamp=0, lla=np.zeros(3))
@@ -205,7 +246,11 @@ class System_Manager():
                 (not self._currentData.gathered['pos_ned_m']) or \
                 (not self._currentData.gathered['imu_ned']) :#or \
             # (not self._currentData.gathered['tracker_px']):
-                print('-return-0-')
+                # Only print warning occasionally to avoid spam
+                if not hasattr(self, '_last_missing_data_warning') or (time.monotonic() - self._last_missing_data_warning) > 2.0:
+                    print(f'-return-0- (Missing flight data. Gathered flags: quat={self._currentData.gathered.get("quat_ned_bodyfrd", False)}, pos={self._currentData.gathered.get("pos_ned_m", False)}, imu={self._currentData.gathered.get("imu_ned", False)})')
+                    print(f'  System_manager: Check if hardware_adapter is publishing on port {zmqTopics.topicMavlinkPort}')
+                    self._last_missing_data_warning = time.monotonic()
                 return
         else:
             self._currentData = flight_Data
@@ -335,22 +380,99 @@ class System_Manager():
         elif self.yawCommandType == YAW_COMMAND_TYPE.RATE:
             yawCmdRate = rpyRate_cmd[2]
         
+        # Validate command before sending
+        if command is None:
+            if not hasattr(self, '_last_none_cmd_warning') or (time.monotonic() - self._last_none_cmd_warning) > 2.0:
+                print("Warning: command is None, skipping send")
+                self._last_none_cmd_warning = time.monotonic()
+            # Create empty msg to return
+            msg = {}
+            return msg
+        if not isinstance(command, (list, np.ndarray)) or len(command) != 3:
+            if not hasattr(self, '_last_invalid_cmd_warning') or (time.monotonic() - self._last_invalid_cmd_warning) > 2.0:
+                print(f"Warning: Invalid command format. Expected array of length 3, got: {type(command)}, value: {command}")
+                self._last_invalid_cmd_warning = time.monotonic()
+            # Create empty msg to return
+            msg = {}
+            return msg
+        # Check if command is all zeros (might indicate an issue)
+        command_array = np.array(command)
+        if np.allclose(command_array, 0.0):
+            # This is actually valid - zero velocity command is okay
+            pass
+        
+        # Initialize debug counters if needed
+        if not hasattr(self, '_cmd_send_count'):
+            self._cmd_send_count = 0
+            self._last_cmd_send_debug_time = time.monotonic()
+        
+        latest_cmd_for_debug = command  # Store for debug output
+        
+        # Increment message count for all command types
+        self.message_count += 1
+        
         if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
+            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
+            try:
+                # Send as single-part message with topic prefix
+                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(msg))
+                self._cmd_send_count += 1
+            except Exception as e:
+                print(f"Error sending velocity command: {e}")
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor}
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(msg)])
+            latest_cmd_for_debug = command_ned
+            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor, 'message_count':self.message_count, 'message_ts':time.monotonic()}
+            try:
+                # Send as single-part message with topic prefix
+                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(msg))
+                self._cmd_send_count += 1
+            except Exception as e:
+                print(f"Error sending velocity RL command: {e}")
+        
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
-            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAcc, pickle.dumps(msg)])
+            msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
+            # Send as single-part message with topic prefix
+            try:
+                self.pubSock.send(zmqTopics.topicGuidenceCmdAcc + pickle.dumps(msg))
+                self._cmd_send_count += 1
+            except Exception as e:
+                print(f"Error sending acceleration command: {e}")
         else:
             msg = { 'ts': time.monotonic(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
                 'quatNedDesBodyFrdCmd':[quat_ned_desbodyfrd_cmd.w, quat_ned_desbodyfrd_cmd.x, quat_ned_desbodyfrd_cmd.y, quat_ned_desbodyfrd_cmd.z],
-                'isRate':self.rateControlEnabled
+                'isRate':self.rateControlEnabled, 'message_count':self.message_count, 'message_ts':time.monotonic()
             }
-            self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAttitude, pickle.dumps(msg)])
+            # Send as single-part message with topic prefix
+            try:
+                self.pubSock.send(zmqTopics.topicGuidenceCmdAttitude + pickle.dumps(msg))
+                self._cmd_send_count += 1
+            except Exception as e:
+                print(f"Error sending attitude command: {e}")
+        
+        # Debug output every 2 seconds (after all controller type checks)
+        if not hasattr(self, '_last_cmd_send_debug_time'):
+            self._last_cmd_send_debug_time = time.monotonic()
+        current_time = time.monotonic()
+        if current_time - self._last_cmd_send_debug_time > 2.0:
+            controller_type_str = "VELOCITYPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID else \
+                                  "VELOCITYRL" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL else \
+                                  "ACCELERATIONPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID else "ATTITUDE"
+            print(f"System_manager: Sent {self._cmd_send_count} commands in last 2s. Controller: {controller_type_str}, message_count: {self.message_count}")
+            self._cmd_send_count = 0
+            self._last_cmd_send_debug_time = current_time
+        
+        # Debug output for all controller types (moved after all send operations)
+        if not hasattr(self, '_last_cmd_send_debug_time'):
+            self._last_cmd_send_debug_time = time.monotonic()
+        current_time = time.monotonic()
+        if current_time - self._last_cmd_send_debug_time > 2.0:
+            controller_type_str = "VELOCITYPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID else \
+                                  "VELOCITYRL" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL else \
+                                  "ACCELERATIONPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID else "ATTITUDE"
+            print(f"System_manager: Sent {self._cmd_send_count} commands in last 2s. Controller: {controller_type_str}, message_count: {self.message_count}")
+            self._cmd_send_count = 0
+            self._last_cmd_send_debug_time = current_time
 
         monitorTime=1
         if time.monotonic() - self.tic >= monitorTime:
@@ -594,59 +716,113 @@ class System_Manager():
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 #################################################################################################################
     def gatherData(self):
-        subsSock2 = zmqWrapper.subscribe( topics=[ zmqTopics.topicMavlinkFlightData ], port=zmqTopics.topicMavlinkPort )
-
-        socks = zmq.select([subsSock2], [], [], 0.001)[0]
+        # Use the persistent socket created in __init__
+        # With CONFLATE enabled, we only get the latest message
+        # Receive single-part message with topic prefix
+        ret = None
+        # Try multiple times to catch messages (with CONFLATE, we only get the latest anyway)
+        for attempt in range(3):
+            try:
+                ret = self.subsSock.recv(zmq.NOBLOCK)  # Single-part message
+                break  # Got a message, exit loop
+            except zmq.Again:
+                # No message available - try again with small delay
+                if attempt < 2:
+                    time.sleep(0.0001)  # Small delay before retry
+                    continue
+                # No message after retries
+                pass
+            except Exception as e:
+                if not hasattr(self, '_last_gather_error_time') or (time.monotonic() - self._last_gather_error_time) > 5.0:
+                    print(f"Error in gatherData: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self._last_gather_error_time = time.monotonic()
+                break
         
-        while True:
-            if len(socks) > 0:
-                socket = socks[0]
-                ret = socket.recv_multipart()
-                topic = ret[0]
-                data = pickle.loads(ret[1])
-                if topic == zmqTopics.topicMavlinkFlightData:  
- 
-                    self._currentData = data# mavlink LOCAL_POSITION_NED      # Flight controller time                  
-                    #if (self._currentData.custom_mode_id == 50593792) or \ # and self._currentData.groundspeed<0.5) or  \
-                    if self._currentData.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # HOLD ON state or POSITION state
-                        
-                        self._input_logger = None
-                        self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
-                        self.holdonHeading = self.yawDefinedDir_ned
-                        self.holdonPos_ned = self._currentData.pos_ned_m.ned
-                        self.holdonTime = time.monotonic()
-                        
-                        if self._currentData.throttle>5:
-                            if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
-                                self._controlMain.MaximalThrust = 1
-                            else:
-                                self._controlMain.MaximalThrust = self._controlMain.controlnode.param.mass*9.81/self._currentData.throttle*100
-                                self._controlMain.controlnode.resetIntegralErrorTerms()
-                        
-                        self.homingStage = HOMING_STAGE.SECTION if self.missionType == MISSION_TYPE.TRACKER else HOMING_STAGE.NONE
-                        self._currentData.offboardMode = False
-                        self.offboardEntry = True
-                        
-                    elif self._currentData.custom_mode_id == PX4_FLIGHT_STATE.OFFBOARD.value:  
-                        if self._input_logger is None:
-                            self._input_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_system_manager", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
-
-                        self._currentData.offboardMode = True
-                        if self._controlMain.controlnode.controllerType != CONTROLLER_TYPE.VELOCITYRL:
-                            if not self._controlMain.controlnode.use_integralTerm:
-                                self._controlMain.controlnode.resetIntegralErrorTerms()
-                                self._controlMain.controlnode.use_integralTerm = True
-
-                        if self.offboardEntry and self.missionType == MISSION_TYPE.WAYPOINT and \
-                           hasattr(self, 'pointList'):
-                            self.pointIndex = (self.pointIndex + 1) % len(self.pointList)
-                            self.referencePoint = self.pointList[self.pointIndex]
-                            self.offboardEntry = False
-                    break
+        # Process the received message if we got one
+        if ret is not None:
+            try:
+                # Strip topic prefix (needed for subscription filtering) before unpickling
+                if ret.startswith(zmqTopics.topicMavlinkFlightData):
+                    data_bytes = ret[len(zmqTopics.topicMavlinkFlightData):]
+                    data = pickle.loads(data_bytes)  # Unpickle the data part
+                else:
+                    # Unexpected message format
+                    print(f"Warning: Received message without expected topic prefix")
+                    return
+                curTime = time.monotonic()
+                # print(f"System_manager: message count {data.message_count}, message delay {curTime - data.local_ts}")
+                # No need to check topic - we only subscribe to one topic (topicMavlinkFlightData)
                 
-            socks = zmq.select([subsSock2], [], [], 0.001)[0]
-            
-        subsSock2.close()
+                # # Debug: Track successful receives
+                # if not hasattr(self, '_data_receive_count'):
+                #     self._data_receive_count = 0
+                #     self._last_data_receive_debug_time = time.monotonic()
+                #     self._last_no_data_warning_time = 0
+                # self._data_receive_count += 1
+                # currentTime = time.monotonic()
+                # if currentTime - self._last_data_receive_debug_time > 2.0:
+                #     print(f"System_manager: Received {self._data_receive_count} flight data messages in last 2s")
+                #     self._data_receive_count = 0
+                #     self._last_data_receive_debug_time = time.monotonic()
+                # # Reset no-data warning timer since we received data
+                # self._last_no_data_warning_time = time.monotonic()
+                
+                self._currentData = data# mavlink LOCAL_POSITION_NED      # Flight controller time
+                # Set gathered flags to indicate we have received data
+                self._currentData.gathered['quat_ned_bodyfrd'] = True
+                self._currentData.gathered['pos_ned_m'] = True
+                self._currentData.gathered['imu_ned'] = True
+                                      
+                #if (self._currentData.custom_mode_id == 50593792) or \ # and self._currentData.groundspeed<0.5) or  \
+                if self._currentData.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # HOLD ON state or POSITION state
+                    
+                    self._input_logger = None
+                    self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
+                    self.holdonHeading = self.yawDefinedDir_ned
+                    self.holdonPos_ned = self._currentData.pos_ned_m.ned
+                    self.holdonTime = time.monotonic()
+                    
+                    if self._currentData.throttle>5:
+                        if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
+                            self._controlMain.MaximalThrust = 1
+                        else:
+                            self._controlMain.MaximalThrust = self._controlMain.controlnode.param.mass*9.81/self._currentData.throttle*100
+                            self._controlMain.controlnode.resetIntegralErrorTerms()
+                    
+                    self.homingStage = HOMING_STAGE.SECTION if self.missionType == MISSION_TYPE.TRACKER else HOMING_STAGE.NONE
+                    self._currentData.offboardMode = False
+                    self.offboardEntry = True
+                    
+                elif self._currentData.custom_mode_id == PX4_FLIGHT_STATE.OFFBOARD.value:  
+                    if self._input_logger is None:
+                        self._input_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_system_manager", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="CSV")
+
+                    self._currentData.offboardMode = True
+                    if self._controlMain.controlnode.controllerType != CONTROLLER_TYPE.VELOCITYRL:
+                        if not self._controlMain.controlnode.use_integralTerm:
+                            self._controlMain.controlnode.resetIntegralErrorTerms()
+                            self._controlMain.controlnode.use_integralTerm = True
+
+                    if self.offboardEntry and self.missionType == MISSION_TYPE.WAYPOINT and \
+                       hasattr(self, 'pointList'):
+                        self.pointIndex = (self.pointIndex + 1) % len(self.pointList)
+                        self.referencePoint = self.pointList[self.pointIndex]
+                        self.offboardEntry = False
+            except Exception as e:
+                if not hasattr(self, '_last_gather_error_time') or (time.monotonic() - self._last_gather_error_time) > 5.0:
+                    print(f"Error processing flight data in gatherData: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self._last_gather_error_time = time.monotonic()
+        else:
+            # No message received - warn occasionally
+            if not hasattr(self, '_last_no_data_warning_time'):
+                self._last_no_data_warning_time = time.monotonic()
+            if time.monotonic() - self._last_no_data_warning_time > 5.0:
+                print(f"System_manager: WARNING - No flight data received for 5s. Is hardware_adapter running and publishing on port {zmqTopics.topicMavlinkPort}?")
+                self._last_no_data_warning_time = time.monotonic()
 
 
 ############################################################################################################################
@@ -733,8 +909,19 @@ def quad_sim(t, Ts, quad, ctrl, wind, traj):
 ############################################################################################################################
 
 def main():
+    import sys
+    sys.stdout.flush()  # Ensure output is flushed immediately
+    print("=" * 60)
+    print("System_Manager starting...")
+    print("=" * 60)
+    sys.stdout.flush()
     if REAL_TIME:
         sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
+        print("System_Manager initialized. Starting main loop...")
+        print("System_Manager: Waiting for flight data from hardware_adapter...")
+        print("System_Manager: If you see '-return-0-' messages, hardware_adapter may not be publishing data")
+        print("System_Manager: Main loop running at 100Hz...")
+        loop_count = 0
         next_loop_time = time.monotonic()
         while True:
             # time.sleep(0.0001)
@@ -747,7 +934,17 @@ def main():
             next_loop_time += 0.010
             
             startTime = time.monotonic()
-            sysMgr.sys_manager_step()
+            try:
+                sysMgr.sys_manager_step()
+                loop_count += 1
+                # Print status every 1000 loops (every ~10 seconds at 100Hz)
+                if loop_count % 1000 == 0:
+                    print(f"System_Manager: Main loop running, iteration {loop_count}")
+            except Exception as e:
+                print(f"Error in sys_manager_step: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)  # Prevent tight error loop
             endTime = time.monotonic()
             # print("Computation Time",endTime-startTime)
     else:
@@ -859,4 +1056,12 @@ def main():
     plt.show()
     pass
 if __name__=='__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nSystem_Manager: Shutting down...")
+    except Exception as e:
+        print(f"System_Manager: Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
