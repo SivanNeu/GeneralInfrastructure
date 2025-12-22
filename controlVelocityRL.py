@@ -52,7 +52,9 @@ class VelocityRLController:
         # self.sf_policy = sf_enjoy.enjoy
         
         rlFilePathVfVr = './train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth'
-        rlFilePathOmegaYaw = './train_dir/rlcat_yaw/checkpoint_p0/best_000000441_451584_reward_-76.342.pth'
+        # rlFilePathOmegaYaw = './train_dir/rlcat_yaw/checkpoint_p0/best_000000441_451584_reward_-76.342.pth' #slow control
+        rlFilePathOmegaYaw = './train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth' #fast control
+        # rlFilePathOmegaYaw = './train_dir/train_yaw_new_parameters_tan_reward/checkpoint_p0/best_000008770_8980480_reward_781.952.pth' #tan fast control
         print("Loading RL policy from: "+rlFilePathVfVr)
         print("Loading RL policy from: "+rlFilePathOmegaYaw)
         time.sleep(0.5)

@@ -118,6 +118,8 @@ class VelocityPIDController:
         self.A = velocity_command
         
         yaw_command = 0.0
+        
+        obs = np.concat((pos_ned, vel_ned,omega_ned))
         if self.yawCommandType == YAW_COMMAND_TYPE.RATE:
             b1d_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(b1d)
             self.eYaw = np.arctan2(b1d_bodyfrd[1], b1d_bodyfrd[0])
@@ -128,7 +130,7 @@ class VelocityPIDController:
             yaw_command = self.param.keYaw * self.eYaw + self.param.keYawRate * self.eYawRate + self.param.keYawIntegral * self.eYawIntegral
             
  # f_total or desired velocity, R_desired, Omega_desired_frd 
-        return velocity_command, np.eye(3), np.array([0.0, 0.0, yaw_command])
+        return velocity_command, np.eye(3), np.array([0.0, 0.0, yaw_command]), obs
 ###############################################################################################################
 
     def update_current_time(self, currentTime):

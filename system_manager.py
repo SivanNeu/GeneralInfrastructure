@@ -44,7 +44,7 @@ from controlVelocityRL import VelocityRLController
 #     import zmqTopics
 #     import zmqWrapper
 #     import mps
-REAL_TIME = False
+REAL_TIME = True
 class MISSION_TYPE(Enum):
     NONE = 0
     WAYPOINT = 1
@@ -100,7 +100,7 @@ class System_Manager():
         ##############################
         factor = 1
         self.referencePoint = np.array([ 0, 0, 0])
-        self.desiredHeadingDir_ned = np.array([1, 1, 0])
+        self.desiredHeadingDir_ned = np.array([-1, -1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
