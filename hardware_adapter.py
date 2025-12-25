@@ -26,13 +26,9 @@ import os
 #mavproxy.py --master=/dev/ttyACM0 --baudrate 57600
 #find / -name "mavproxy.py" 2>/dev/null
 
-SIM = os.getenv('SIM', False)
-if SIM == 'True':
-    print("SIM is True")
-    mavlinkAddress = 'udp:127.0.0.1:14540'
-else:
-    print("SIM is False")
-    mavlinkAddress = 'udp:127.0.0.1:14550'
+
+mavlinkAddress = 'udp:127.0.0.1:14540'
+
 
 MAVLINK_QUEUE_SIZE = 200
 MAVLINK_RATE_HZ = 50
@@ -157,8 +153,17 @@ class Hardware_Adapter():
     def init_succeeded(self):
         return self._init_success
 
-    def listenerToMavlink(self):
-        msg = self.mavlink_connection.recv_match( blocking=True, timeout=0.001)
+    def listenerToMavlink(self, blocking=True, timeout=0.001, use_lock=True, apply_filter=True):
+        """
+        Listen to mavlink messages and process them.
+        
+        Args:
+            blocking: If True, blocks waiting for a message. If False, returns immediately if no message.
+            timeout: Timeout in seconds (only used when blocking=True)
+            use_lock: If True, uses thread-safe locks for data access (default True)
+            apply_filter: If True, applies filtering to the data after parsing (default True)
+        """
+        msg = self.mavlink_connection.recv_match(blocking=blocking, timeout=1 if blocking else 0.0)
         if(msg is None):
             return
         if(msg.get_type() == "BAD_DATA"):
@@ -174,20 +179,39 @@ class Hardware_Adapter():
             
         if msg_dict['mavpackettype'] in RELEVANT_MAVLINK_MESSAGES:
             ind = RELEVANT_MAVLINK_MESSAGES.index(msg_dict['mavpackettype'])
-            self.parse(msg_dict)
+            # Use lock for thread safety if requested
+            if use_lock:
+                with self._data_lock:
+                    self.parse(msg_dict)
+                    # Apply filtering if requested
+                    if apply_filter:
+                        self._filter_data(self._current_data)
+            else:
+                self.parse(msg_dict)
+                if apply_filter:
+                    self._filter_data(self._current_data)
         else:
             pass
             # print(str(msg_dict))
         
-        if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # OFFBOARD state
-            self._mavlink_logger = None
-        elif self._mavlink_logger is None:
-            self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
-        
-        if self._mavlink_logger is not None:
-            self._mavlink_logger.log(str(msg_dict))
+        # Handle mavlink logger with thread safety
+        if use_lock:
+            with self._data_lock:
+                if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # OFFBOARD state
+                    self._mavlink_logger = None
+                elif self._mavlink_logger is None:
+                    self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
+                
+                if self._mavlink_logger is not None:
+                    self._mavlink_logger.log(str(msg_dict))
         else:
-            pass
+            if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # OFFBOARD state
+                self._mavlink_logger = None
+            elif self._mavlink_logger is None:
+                self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")                    
+            
+            if self._mavlink_logger is not None:
+                self._mavlink_logger.log(str(msg_dict))
 ################################################################################################################
     def listenerToCommands(self):
         ret = zmq.select([subSock], [], [], timeout=0.001)
@@ -360,7 +384,7 @@ class Hardware_Adapter():
 #################################################################################################################
     def _init_mavlink(self):
         try:
-            self.mavlink_connection = mavutil.mavlink_connection(mavlinkAddress)
+            self.mavlink_connection = mavutil.mavlink_connection(mavlinkAddress, autoreconnect=True)
             self.mavlink_connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
             # self.mavlink_connection.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
             #                                 mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
@@ -870,35 +894,8 @@ class Hardware_Adapter():
             try:
                 current_time = time.monotonic()
                 
-                # Process mavlink messages (non-blocking)
-                msg = self.mavlink_connection.recv_match(blocking=False, timeout=0.0)
-                if msg is not None and msg.get_type() != "BAD_DATA":
-                    msg_dict = msg.to_dict()
-                    msg_dict['local-ts'] = current_time
-
-                    if 'time_boot_ms' in msg_dict.keys():
-                        pass
-                        
-                    if msg_dict['mavpackettype'] == 'HEARTBEAT':
-                        msg_dict['mode_string'] = mavutil.mode_string_v10(msg)
-                        
-                    if msg_dict['mavpackettype'] in RELEVANT_MAVLINK_MESSAGES:
-                        ind = RELEVANT_MAVLINK_MESSAGES.index(msg_dict['mavpackettype'])
-                        # Update data with lock for thread safety
-                        with self._data_lock:
-                            self.parse(msg_dict)
-                            # Apply filtering
-                            self._filter_data(self._current_data)
-                    
-                    # Handle mavlink logger
-                    with self._data_lock:
-                        if self._current_data.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:
-                            self._mavlink_logger = None
-                        elif self._mavlink_logger is None:
-                            self._mavlink_logger = Logger(log_name=time.strftime("%Y%m%d_%H%M%S")+"_mavlink", log_dir=self._log_dir, save_log_to_file=True, print_logs_to_console=False, datatype="TXT")
-                        
-                        if self._mavlink_logger is not None:
-                            self._mavlink_logger.log(str(msg_dict))
+                # Process mavlink messages (non-blocking, with thread safety and filtering)
+                self.listenerToMavlink(blocking=True, timeout=0.0, use_lock=True, apply_filter=True)
                 
                 # Publish data at specified frequency (independent of mavlink message arrival)
                 if current_time >= outTime:
