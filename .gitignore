@@ -1,15 +1,15 @@
 # Python bytecode files
 **/*.pyc
 *.pyc
-*.pth
+*.pyo
+*.pyd
 
 # Python cache directories (Python 3)
 **/__pycache__/
 __pycache__/
-train_dir/
-# Python compiled files
-*.pyo
-*.pyd
+
+# Python model checkpoints
+*.pth
 
 # Python distribution / packaging
 .Python
@@ -29,3 +29,50 @@ wheels/
 .installed.cfg
 *.egg
 
+# Training directories
+train_dir/
+
+# C/C++ build artifacts
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+hardware_adapter/c/bin/
+hardware_adapter/c/obj_*/
+
+# Logs
+*.log
+hardware_adapter/logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json

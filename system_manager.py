@@ -23,6 +23,7 @@ import zmq
 import zmqWrapper
 import zmqTopics
 import pickle
+import struct
 # from Filter.AllInOneKalman import AllInOneKalman
 # from virtual_tracker import Tracker
 
@@ -94,12 +95,12 @@ class System_Manager():
         ##############################
         # start scenario definitions #
         ##############################
-        factor = 10
-        self.referencePoint = np.array([ 10, 0, 0])
+        factor = 1
+        self.referencePoint = np.array([ 0, 0, 0])
         self.desiredHeadingDir_ned = np.array([1, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
         self.yawCommandFactor = 1        
@@ -109,7 +110,7 @@ class System_Manager():
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
         self.circleRadius = 5*factor
-        self.controllerType = CONTROLLER_TYPE.VELOCITYRL
+        self.controllerType = CONTROLLER_TYPE.VELOCITYPID
         self.yawCommandType = YAW_COMMAND_TYPE.RATE
         
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
@@ -154,9 +155,10 @@ class System_Manager():
         
         # Send a test message to verify connection
         try:
-            test_msg = {'ts': time.monotonic(), 'velCmd': [0.0, 0.0, 0.0], 'yawCmd': 0.0, 'yawRateCmd': 0.0}
+            # Serialize test command to binary format
+            test_cmd_data = self._serialize_vel_cmd([0.0, 0.0, 0.0], 0.0, 0.0)
             # Send as single-part message with topic prefix
-            self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(test_msg))
+            self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + test_cmd_data)
             print(f"System_Manager: Sent test command message to verify connection")
         except Exception as e:
             print(f"System_Manager: ERROR - Failed to send test command: {e}")
@@ -411,22 +413,31 @@ class System_Manager():
         # Increment message count for all command types
         self.message_count += 1
         
+        # Initialize msg dict for return value (will be populated based on controller type)
+        msg = {}
+        
         if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             try:
+                # Serialize to binary format for C code
+                cmd_data = self._serialize_vel_cmd(command, yawCmd, yawCmdRate)
                 # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(msg))
+                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
                 self._cmd_send_count += 1
+                # Populate msg for return value
+                msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
                 print(f"Error sending velocity command: {e}")
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
             latest_cmd_for_debug = command_ned
-            msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             try:
+                # Serialize to binary format for C code
+                cmd_data = self._serialize_vel_cmd(command_ned, yawCmd, yawCmdRate*self.yawCommandFactor)
                 # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(msg))
+                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
                 self._cmd_send_count += 1
+                # Populate msg for return value
+                msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
                 print(f"Error sending velocity RL command: {e}")
         
@@ -439,16 +450,29 @@ class System_Manager():
             except Exception as e:
                 print(f"Error sending acceleration command: {e}")
         else:
-            msg = { 'ts': time.monotonic(), 'thrustCmd':command, 'rpyRateCmd':rpyRate_cmd,
-                'quatNedDesBodyFrdCmd':[quat_ned_desbodyfrd_cmd.w, quat_ned_desbodyfrd_cmd.x, quat_ned_desbodyfrd_cmd.y, quat_ned_desbodyfrd_cmd.z],
-                'isRate':self.rateControlEnabled, 'message_count':self.message_count, 'message_ts':time.monotonic()
-            }
-            # Send as single-part message with topic prefix
             try:
-                self.pubSock.send(zmqTopics.topicGuidenceCmdAttitude + pickle.dumps(msg))
+                # Serialize to binary format for C code
+                # For attitude commands, command is typically a single thrust value or array
+                # Extract thrust value - if it's an array, use the appropriate element, otherwise use directly
+                if isinstance(command, (list, np.ndarray)) and len(command) >= 1:
+                    # If it's an array, use the first element (or last if it's [x, y, z] format)
+                    thrust_val = float(command[0]) if len(command) == 1 else float(command[2] if len(command) >= 3 else command[0])
+                elif isinstance(command, (int, float, np.number)):
+                    thrust_val = float(command)
+                else:
+                    thrust_val = 0.0
+                cmd_data = self._serialize_attitude_cmd(thrust_val, rpyRate_cmd, quat_ned_desbodyfrd_cmd, self.rateControlEnabled)
+                # Send as single-part message with topic prefix
+                self.pubSock.send(zmqTopics.topicGuidenceCmdAttitude + cmd_data)
                 self._cmd_send_count += 1
+                # Populate msg for return value
+                msg = { 'ts': time.monotonic(), 'thrustCmd':thrust_val, 'rpyRateCmd':rpyRate_cmd,
+                       'quatNedDesBodyFrdCmd':[quat_ned_desbodyfrd_cmd.w, quat_ned_desbodyfrd_cmd.x, quat_ned_desbodyfrd_cmd.y, quat_ned_desbodyfrd_cmd.z],
+                       'isRate':self.rateControlEnabled, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
                 print(f"Error sending attitude command: {e}")
+                import traceback
+                traceback.print_exc()
         
         # Debug output every 2 seconds (after all controller type checks)
         if not hasattr(self, '_last_cmd_send_debug_time'):
@@ -715,6 +739,205 @@ class System_Manager():
         yaw_control = YAW_COMMAND.DEFINED_DIR
         return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 #################################################################################################################
+    def _serialize_vel_cmd(self, vel_cmd, yaw_cmd, yaw_rate_cmd):
+        """
+        Serialize velocity command to binary format for C code.
+        Format: magic (4 bytes), version (4 bytes), vel[3] (24 bytes), yaw (8 bytes), 
+                yaw_rate (8 bytes), yaw_valid (1 byte), yaw_rate_valid (1 byte), padding (2 bytes)
+        """
+        # Magic number: "VELC" = 0x56454C43
+        magic = 0x56454C43
+        version = 1
+        
+        # Check if yaw/yaw_rate are valid (not NaN)
+        yaw_valid = 1 if not np.isnan(yaw_cmd) else 0
+        yaw_rate_valid = 1 if not np.isnan(yaw_rate_cmd) else 0
+        
+        # Use NaN-safe values
+        yaw_val = yaw_cmd if not np.isnan(yaw_cmd) else 0.0
+        yaw_rate_val = yaw_rate_cmd if not np.isnan(yaw_rate_cmd) else 0.0
+        
+        # Pack as little-endian binary: '<II' (magic, version), '<3d' (vel), '<2d' (yaw, yaw_rate), '<2B' (flags)
+        return struct.pack('<II', magic, version) + \
+               struct.pack('<3d', vel_cmd[0], vel_cmd[1], vel_cmd[2]) + \
+               struct.pack('<2d', yaw_val, yaw_rate_val) + \
+               struct.pack('<2B', yaw_valid, yaw_rate_valid) + \
+               b'\x00\x00'  # padding
+    
+    def _serialize_attitude_cmd(self, thrust_cmd, rpy_rate_cmd, quat_cmd, is_rate):
+        """
+        Serialize attitude command to binary format for C code.
+        Format: magic (4 bytes), version (4 bytes), thrust (8 bytes), rpy_rate[3] (24 bytes), 
+                quat[4] (32 bytes), is_rate (1 byte), padding (3 bytes)
+        """
+        # Magic number: "ATTI" = 0x41545449
+        magic = 0x41545449
+        version = 1
+        
+        # Pack as little-endian binary: '<II' (magic, version), '<d' (thrust), '<3d' (rpy_rate), '<4d' (quat), '<B' (is_rate)
+        return struct.pack('<II', magic, version) + \
+               struct.pack('<d', thrust_cmd) + \
+               struct.pack('<3d', rpy_rate_cmd[0], rpy_rate_cmd[1], rpy_rate_cmd[2]) + \
+               struct.pack('<4d', quat_cmd.w, quat_cmd.x, quat_cmd.y, quat_cmd.z) + \
+               struct.pack('<B', 1 if is_rate else 0) + \
+               b'\x00\x00\x00'  # padding
+
+#################################################################################################################
+    def _deserialize_flight_data(self, data_bytes):
+        """
+        Deserialize flight data from binary format sent by hardware_adapter.
+        The C code sends a binary format that we deserialize here.
+        Format: magic (4 bytes), version (4 bytes), then all numeric fields.
+        """
+        try:
+            # Try to deserialize as pickle first (for backward compatibility)
+            try:
+                return pickle.loads(data_bytes)
+            except (pickle.UnpicklingError, ValueError, TypeError):
+                # Not pickle format, try binary format
+                pass
+            
+            # Deserialize binary format
+            if len(data_bytes) < 8:
+                raise ValueError("Data too short")
+            
+            # Read magic and version
+            magic, version = struct.unpack('<II', data_bytes[0:8])
+            if magic != 0x464C4947:  # "FLIG"
+                raise ValueError(f"Invalid magic number: {hex(magic)}")
+            if version != 1:
+                raise ValueError(f"Unsupported version: {version}")
+            
+            offset = 8
+            
+            # Create Flight_Data object
+            from common import Flight_Data, Quaternion, NED, LLA, Altitude, Imu, FLIGHT_MODE
+            
+            data = Flight_Data()
+            
+            # Read message_count (uint32_t)
+            data.message_count = struct.unpack('<I', data_bytes[offset:offset+4])[0]
+            offset += 4
+            
+            # Read all doubles (63 doubles total: 19 scalars + 5 quaternion + 4 altitude + 7 imu_raw + 7 imu_ned + 7 pos_ned + 4 raw_lla + 4 filt_lla + 3 rpy_rates + 3 rpy)
+            # Format: '<63d' for 63 doubles in little-endian
+            doubles = struct.unpack('<63d', data_bytes[offset:offset+504])
+            offset += 504
+            idx = 0
+            
+            data.quat_ts = doubles[idx]; idx += 1
+            data.imu_ts = doubles[idx]; idx += 1
+            data.timestamp = doubles[idx]; idx += 1
+            data.local_ts = doubles[idx]; idx += 1
+            data.temperature = doubles[idx]; idx += 1
+            data.amsl_m = doubles[idx]; idx += 1
+            data.local_m = doubles[idx]; idx += 1
+            data.monotonic_m = doubles[idx]; idx += 1
+            data.relative_m = doubles[idx]; idx += 1
+            data.terrain_m = doubles[idx]; idx += 1
+            data.bottom_clearance_m = doubles[idx]; idx += 1
+            data.pressure = doubles[idx]; idx += 1
+            data.absolute_press_hpa = doubles[idx]; idx += 1
+            data.differential_press_hpa = doubles[idx]; idx += 1
+            data.signal_strength_percent = doubles[idx]; idx += 1
+            data.throttle = doubles[idx]; idx += 1
+            data.heading = doubles[idx]; idx += 1
+            data.groundspeed = doubles[idx]; idx += 1
+            data.current_thrust = doubles[idx]; idx += 1
+            
+            # Quaternion
+            data.quat_ned_bodyfrd = Quaternion(doubles[idx+1], doubles[idx+2], doubles[idx+3], doubles[idx])  # x, y, z, w
+            data.quat_ned_bodyfrd.timestamp = doubles[idx+4]
+            idx += 5
+            
+            # Altitude
+            data.altitude_m = Altitude(doubles[idx], doubles[idx+1])  # amsl, relative
+            data.altitude_m.vertical_speed_estimate = doubles[idx+2]
+            data.altitude_m.timestamp = doubles[idx+3]
+            idx += 4
+            
+            # IMU raw FRD
+            data.imu_raw_frd = Imu(doubles[idx+6], np.array([doubles[idx], doubles[idx+1], doubles[idx+2]]), 
+                                   np.array([doubles[idx+3], doubles[idx+4], doubles[idx+5]]))
+            idx += 7
+            
+            # IMU NED
+            data.imu_ned = Imu(doubles[idx+6], np.array([doubles[idx], doubles[idx+1], doubles[idx+2]]), 
+                              np.array([doubles[idx+3], doubles[idx+4], doubles[idx+5]]))
+            idx += 7
+            
+            # Position NED
+            data.pos_ned_m = NED(ned=np.array([doubles[idx], doubles[idx+1], doubles[idx+2]]),
+                                vel_ned=np.array([doubles[idx+3], doubles[idx+4], doubles[idx+5]]),
+                                timestamp=doubles[idx+6])
+            idx += 7
+            
+            # Raw position LLA
+            data.raw_pos_lla_deg = LLA(timestamp=doubles[idx+3], lla=np.array([doubles[idx], doubles[idx+1], doubles[idx+2]]))
+            idx += 4
+            
+            # Filtered position LLA
+            data.filt_pos_lla_deg = LLA(timestamp=doubles[idx+3], lla=np.array([doubles[idx], doubles[idx+1], doubles[idx+2]]))
+            idx += 4
+            
+            # RPY rates and RPY
+            data.rpy_rates = np.array([doubles[idx], doubles[idx+1], doubles[idx+2]])
+            data.rpy = np.array([doubles[idx+3], doubles[idx+4], doubles[idx+5]])
+            idx += 6
+            
+            # Read uint32_t fields
+            data.custom_mode_id = struct.unpack('<I', data_bytes[offset:offset+4])[0]
+            offset += 4
+            mode_val = struct.unpack('<I', data_bytes[offset:offset+4])[0]
+            data.mode = FLIGHT_MODE(mode_val) if mode_val < len(list(FLIGHT_MODE)) else FLIGHT_MODE.UNKNOWN
+            offset += 4
+            
+            # Read bools (packed as uint8_t)
+            bools = struct.unpack('<B', data_bytes[offset:offset+1])[0]
+            offset += 1
+            data.is_armed = bool(bools & 1)
+            data.offboardMode = bool(bools & 2)
+            data.is_available = bool(bools & 4)
+            data.was_available_once = bool(bools & 8)
+            data.is_gyrometer_calibration_ok = bool(bools & 16)
+            data.is_accelerometer_calibration_ok = bool(bools & 32)
+            data.is_magnetometer_calibration_ok = bool(bools & 64)
+            data.in_air = bool(bools & 128)
+            
+            # Read gathered flags (uint32_t bitfield)
+            gathered_flags = struct.unpack('<I', data_bytes[offset:offset+4])[0]
+            offset += 4
+            data.gathered['euler_ned_bodyfrd'] = bool(gathered_flags & 1)
+            data.gathered['quat_ned_bodyfrd'] = bool(gathered_flags & 2)
+            data.gathered['pos_ned_m'] = bool(gathered_flags & 4)
+            data.gathered['vel_ned_m'] = bool(gathered_flags & 8)
+            data.gathered['imu_ned'] = bool(gathered_flags & 16)
+            data.gathered['tracker_px'] = bool(gathered_flags & 32)
+            data.gathered['rpy'] = bool(gathered_flags & 64)
+            data.gathered['rpy_rates'] = bool(gathered_flags & 128)
+            data.gathered['custom_mode_id'] = bool(gathered_flags & 256)
+            data.gathered['mode'] = bool(gathered_flags & 512)
+            data.gathered['relative_m'] = bool(gathered_flags & 1024)
+            data.gathered['amsl_m'] = bool(gathered_flags & 2048)
+            data.gathered['local_m'] = bool(gathered_flags & 4096)
+            data.gathered['monotonic_m'] = bool(gathered_flags & 8192)
+            data.gathered['terrain_m'] = bool(gathered_flags & 16384)
+            data.gathered['bottom_clearance_m'] = bool(gathered_flags & 32768)
+            data.gathered['absolute_press_hpa'] = bool(gathered_flags & 65536)
+            data.gathered['differential_press_hpa'] = bool(gathered_flags & 131072)
+            data.gathered['pressure'] = bool(gathered_flags & 262144)
+            data.gathered['temperature'] = bool(gathered_flags & 524288)
+            
+            return data
+            
+        except Exception as e:
+            # If deserialization fails, try pickle as fallback
+            try:
+                return pickle.loads(data_bytes)
+            except:
+                raise ValueError(f"Failed to deserialize flight data: {e}")
+
+#################################################################################################################
     def gatherData(self):
         # Use the persistent socket created in __init__
         # With CONFLATE enabled, we only get the latest message
@@ -743,10 +966,10 @@ class System_Manager():
         # Process the received message if we got one
         if ret is not None:
             try:
-                # Strip topic prefix (needed for subscription filtering) before unpickling
+                # Strip topic prefix (needed for subscription filtering) before deserializing
                 if ret.startswith(zmqTopics.topicMavlinkFlightData):
                     data_bytes = ret[len(zmqTopics.topicMavlinkFlightData):]
-                    data = pickle.loads(data_bytes)  # Unpickle the data part
+                    data = self._deserialize_flight_data(data_bytes)  # Deserialize using new format
                 else:
                     # Unexpected message format
                     print(f"Warning: Received message without expected topic prefix")
