@@ -35,6 +35,7 @@ from controlVelocityPID import VelocityPIDController
 from controlVelocityRL import VelocityRLController
 # from controlAccelerationPID import AccelerationPIDController
 # from controlJaeyoung import JaeyoungController
+from trajectories import horz_circle, pos_point, vel_point, lineConstVel, vert_circle, command_Lissajous
 
 # sys.path.append('../')
 # try:
@@ -263,7 +264,88 @@ class System_Manager():
                 return
         else:
             self._currentData = flight_Data
+        
+        # Set desired state based on mission type
+        controlType, trajDest, pos_ned, quat_ned_bodyfrd, current_ts = self.setDesiredState(curTime)
+        
+        # Generate command from controller
+        cmd_result = self.generateCommand(trajDest, controlType, current_ts, counter, quat_ned_bodyfrd)
+        if cmd_result is None:
+            # Command validation failed, return empty message
+            return {}
+        
+        command, rpyRate_cmd, quat_ned_desbodyfrd_cmd, yawCmd, yawCmdRate = cmd_result
+        
+        # Check if command is all zeros (might indicate an issue)
+        command_array = np.array(command)
+        if np.allclose(command_array, 0.0):
+            # This is actually valid - zero velocity command is okay
+            pass
+        
+        # Initialize debug counters if needed
+        if not hasattr(self, '_cmd_send_count'):
+            self._cmd_send_count = 0
+            self._last_cmd_send_debug_time = time.monotonic()
+        
+        # Increment message count for all command types
+        self.message_count += 1
+        
+        # Publish command to hardware adapter
+        msg = self.publishCommand(command, yawCmd, yawCmdRate, rpyRate_cmd, quat_ned_desbodyfrd_cmd)
+
+        # Monitoring output
+        monitorTime=1
+        if time.monotonic() - self.tic >= monitorTime:
+            self.tic = time.monotonic()
+            missionPoint = self.holdonPos_ned + self.referencePoint
+            deltaPos_ned = missionPoint
+            if quat_ned_bodyfrd is not None:
+                deltaPos_ned = missionPoint - pos_ned
+                deltaPos_frd = quat_ned_bodyfrd.inv().rotate_vec(deltaPos_ned)
+            print('timestamp: ', self._currentData.timestamp, '--->referencePoint: %.3f %.3f %.3f, pos_ned:  %.3f %.3f %.3f '%( 
+                self.referencePoint[0], self.referencePoint[1], self.referencePoint[2],
+                pos_ned[0], pos_ned[1], pos_ned[2])+str(self.homingStage)+                
+                " Command: + %.3f %.3f %.3f"%(command[0], command[1], command[2])+
+                " yawCmd: %.3f"%(yawCmd)+
+                " yawRateCmd: %.3f"%(rpyRate_cmd[2])+
+                " deltaPos_frd: %.3f %.3f %.3f"%(deltaPos_frd[0], deltaPos_frd[1], deltaPos_frd[2]))
             
+            try:
+                print('<<--', np.linalg.norm(missionPoint[0:2]-pos_ned[0:2])+" timestamp:"+str(self._currentData.timestamp))
+            except:
+                pass
+        
+        if log_data and self._input_logger is not None:
+            trajDest_pos_ned = trajDest[0]
+            self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
+                                command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
+                                counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
+            
+        # self._hardware_adapter.send_command(quat_cmd=quat_ned_desbodyfrd_cmd, rpy_rate=rpyRate_cmd, thrust=command)
+        self._prev_imu_ts = self._currentData.imu_ts
+        self._prev_ts = current_ts
+        self._prev_pos_ned = self._currentData.pos_ned_m.ned
+        self.prev_quat_ned_desbodyfrd_cmd = quat_ned_desbodyfrd_cmd
+        
+        return msg
+        
+#################################################################################################################
+    def setDesiredState(self, curTime):
+        """
+        Set desired state based on mission type and current flight data.
+        
+        Args:
+            curTime: Current timestamp
+            
+        Returns:
+            Tuple of (controlType, trajDest, pos_ned, quat_ned_bodyfrd, current_ts)
+            where:
+                controlType: Control type tuple (pos_control, vel_control, yaw_control)
+                trajDest: Tuple of (trajDest_pos_ned, trajDest_vel_ned, trajDest_acc_ned)
+                pos_ned: Current position in NED frame
+                quat_ned_bodyfrd: Current quaternion from body FRD to NED
+                current_ts: Current timestamp
+        """
         self.holdonHeading = self._currentData.quat_ned_bodyfrd.rotate_vec(np.array([1, 0, 0])) if self.holdonHeading is None else self.holdonHeading
         self.holdonPos_ned = self._currentData.pos_ned_m.ned if self.holdonPos_ned is None else self.holdonPos_ned
         self.holdonTime = curTime if self.holdonTime is None else self.holdonTime
@@ -294,7 +376,7 @@ class System_Manager():
             
         missionPoint = self.holdonPos_ned + self.referencePoint;   
         if self.missionType == MISSION_TYPE.WAYPOINT:
-            desired_trajectory = self.pos_point(missionPoint=[missionPoint], missionAttitudeDirection=self.heading_dir_ned)
+            desired_trajectory = pos_point(missionPoint=[missionPoint], missionAttitudeDirection=self.heading_dir_ned, start_time=self._overall_start)
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
@@ -302,22 +384,22 @@ class System_Manager():
          
         elif self.missionType == MISSION_TYPE.VELOCITY:
             missionVelocity = unitVec(missionPoint-self.holdonPos_ned)*self.maximalVelocity
-            desired_trajectory = self.vel_point(missionVelocity=missionVelocity, missionAttitudeDirection=self.heading_dir_ned)
+            desired_trajectory = vel_point(missionVelocity=missionVelocity, missionAttitudeDirection=self.heading_dir_ned, start_time=self._overall_start)
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
             self.heading_dir_ned = desired_trajectory[1][0]
             
         elif self.missionType == MISSION_TYPE.CIRCLE: 
-            desired_trajectory = self.horz_circle(center=missionPoint, radius=self.circleRadius, Vel=self.targetVelocity, missionAttitudeDirection=self.heading_dir_ned)   # bui
-            # desired_trajectory = self.horz_circle(center = np.array([-10,20,0]), radius=10)    # corner ok, bui fades away
+            desired_trajectory = horz_circle(center=missionPoint, radius=self.circleRadius, Vel=self.targetVelocity, missionAttitudeDirection=self.heading_dir_ned, start_time=self._overall_start)   # bui
+            # desired_trajectory = horz_circle(center = np.array([-10,20,0]), radius=10, start_time=self._overall_start)    # corner ok, bui fades away
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
             self.heading_dir_ned = desired_trajectory[1][0]
             
         elif self.missionType == MISSION_TYPE.LISSAJOUS:
-            desired_trajectory = self.command_Lissajous()
+            desired_trajectory = command_Lissajous(start_time=self._overall_start)
             controlType = desired_trajectory[2]   # (PosControl, VelControl, YawControl)
             self.dest_pos_ned = desired_trajectory[0][0]
             self.destHeight = desired_trajectory[0][0][2]
@@ -325,7 +407,7 @@ class System_Manager():
             
         elif self.missionType == MISSION_TYPE.SECTION:
             startPoint = deepcopy(self.holdonPos_ned); endPoint = deepcopy(missionPoint)
-            desired_trajectory = self.lineConstVel(startPoint=startPoint, endPoint=endPoint, startTime=self.holdonTime, 
+            desired_trajectory = lineConstVel(startPoint=startPoint, endPoint=endPoint, startTime=self.holdonTime, 
                                                 speed=self.maximalVelocity, missionAttitudeDirection=self.heading_dir_ned)
             controlType = desired_trajectory[2]
             self.dest_pos_ned = desired_trajectory[0][0]
@@ -335,8 +417,26 @@ class System_Manager():
         trajDest_vel_ned = np.array([0,0,0]) if desired_trajectory is None else desired_trajectory[0][1]
         trajDest_acc_ned = np.array([0,0,0]) if desired_trajectory is None else desired_trajectory[0][2]
         
-        trajDest = (trajDest_pos_ned, trajDest_vel_ned, trajDest_acc_ned)  
+        trajDest = (trajDest_pos_ned, trajDest_vel_ned, trajDest_acc_ned)
+        
+        return (controlType, trajDest, pos_ned, quat_ned_bodyfrd, current_ts)
+    
+    #################################################################################################################
+    def generateCommand(self, trajDest, controlType, current_ts, counter, quat_ned_bodyfrd):
+        """
+        Generate command from controller and process it.
+        
+        Args:
+            trajDest: Tuple of (trajDest_pos_ned, trajDest_vel_ned, trajDest_acc_ned)
+            controlType: Control type tuple (pos_control, vel_control, yaw_control)
+            current_ts: Current timestamp
+            counter: Step counter
+            quat_ned_bodyfrd: Current quaternion from body FRD to NED
             
+        Returns:
+            Tuple of (command, rpyRate_cmd, quat_ned_desbodyfrd_cmd, yawCmd, yawCmdRate) on success,
+            None on validation failure
+        """
         # at HIGH_ALTITUDE_FOLLOW guidance state command is derived from trajDest
         # at TERMINAL_GUIDANCE    guidance state command is derived from los_ned_dir and los_distance
         command, rpyRate_cmd, quat_ned_desbodyfrd_cmd = self._controlMain.get_cmd(pos_ned=deepcopy(self._currentData.pos_ned_m.ned), 
@@ -394,32 +494,30 @@ class System_Manager():
             if not hasattr(self, '_last_none_cmd_warning') or (time.monotonic() - self._last_none_cmd_warning) > 2.0:
                 print("Warning: command is None, skipping send")
                 self._last_none_cmd_warning = time.monotonic()
-            # Create empty msg to return
-            msg = {}
-            return msg
+            return None
         if not isinstance(command, (list, np.ndarray)) or len(command) != 3:
             if not hasattr(self, '_last_invalid_cmd_warning') or (time.monotonic() - self._last_invalid_cmd_warning) > 2.0:
                 print(f"Warning: Invalid command format. Expected array of length 3, got: {type(command)}, value: {command}")
                 self._last_invalid_cmd_warning = time.monotonic()
-            # Create empty msg to return
-            msg = {}
-            return msg
-        # Check if command is all zeros (might indicate an issue)
-        command_array = np.array(command)
-        if np.allclose(command_array, 0.0):
-            # This is actually valid - zero velocity command is okay
-            pass
+            return None
         
-        # Initialize debug counters if needed
-        if not hasattr(self, '_cmd_send_count'):
-            self._cmd_send_count = 0
-            self._last_cmd_send_debug_time = time.monotonic()
+        return (command, rpyRate_cmd, quat_ned_desbodyfrd_cmd, yawCmd, yawCmdRate)
+            
+###############################################################################################################################################
+    def publishCommand(self, command, yawCmd, yawCmdRate, rpyRate_cmd, quat_ned_desbodyfrd_cmd):
+        """
+        Publish command to hardware adapter based on controller type.
         
-        latest_cmd_for_debug = command  # Store for debug output
-        
-        # Increment message count for all command types
-        self.message_count += 1
-        
+        Args:
+            command: Command array (velocity, acceleration, or thrust)
+            yawCmd: Yaw angle command (or NaN if not used)
+            yawCmdRate: Yaw rate command (or NaN if not used)
+            rpyRate_cmd: Roll, pitch, yaw rate command array
+            quat_ned_desbodyfrd_cmd: Desired quaternion from body FRD to NED
+            
+        Returns:
+            Dictionary with command information and metadata
+        """
         # Initialize msg dict for return value (will be populated based on controller type)
         msg = {}
         
@@ -441,7 +539,6 @@ class System_Manager():
                 traceback.print_exc()
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
-            latest_cmd_for_debug = command_ned
             try:
                 # Serialize to binary format for C code
                 cmd_data = self._serialize_vel_cmd(command_ned, yawCmd, yawCmdRate*self.yawCommandFactor)
@@ -503,258 +600,14 @@ class System_Manager():
             self._cmd_send_count = 0
             self._last_cmd_send_debug_time = current_time
         
-        # Debug output for all controller types (moved after all send operations)
-        if not hasattr(self, '_last_cmd_send_debug_time'):
-            self._last_cmd_send_debug_time = time.monotonic()
-        current_time = time.monotonic()
-        if current_time - self._last_cmd_send_debug_time > 2.0:
-            controller_type_str = "VELOCITYPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYPID else \
-                                  "VELOCITYRL" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL else \
-                                  "ACCELERATIONPID" if self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID else "ATTITUDE"
-            print(f"System_manager: Sent {self._cmd_send_count} commands in last 2s. Controller: {controller_type_str}, message_count: {self.message_count}")
-            self._cmd_send_count = 0
-            self._last_cmd_send_debug_time = current_time
-
-        monitorTime=1
-        if time.monotonic() - self.tic >= monitorTime:
-            # print('tar_pos_ned: %.3f %.3f %.3f, tar_vel_ned: %.3f %.3f %.3f'%(est_tracker_pos_ned[0], est_tracker_pos_ned[1], est_tracker_pos_ned[2], tar_vel_ned[0], tar_vel_ned[1], tar_vel_ned[2]))
-            self.tic = time.monotonic()
-            deltaPos_ned = missionPoint
-            if quat_ned_bodyfrd is not None:
-                deltaPos_ned = missionPoint - pos_ned
-                deltaPos_frd = quat_ned_bodyfrd.inv().rotate_vec(deltaPos_ned)
-            print('timestamp: ', self._currentData.timestamp, '--->referencePoint: %.3f %.3f %.3f, pos_ned:  %.3f %.3f %.3f '%( 
-                self.referencePoint[0], self.referencePoint[1], self.referencePoint[2],
-                pos_ned[0], pos_ned[1], pos_ned[2])+str(self.homingStage)+                
-                " Command: + %.3f %.3f %.3f"%(command[0], command[1], command[2])+
-                " yawCmd: %.3f"%(yawCmd)+
-                " yawRateCmd: %.3f"%(rpyRate_cmd[2])+
-                " deltaPos_frd: %.3f %.3f %.3f"%(deltaPos_frd[0], deltaPos_frd[1], deltaPos_frd[2]))#+"   delta_frd"+str(deltaPos_frd))
-            
-            try:
-                print('<<--', np.linalg.norm(missionPoint[0:2]-pos_ned[0:2])+" timestamp:"+str(self._currentData.timestamp))
-            except:
-                pass
-        
-        if log_data and self._input_logger is not None:
-            self._log_input_data(current_ts=current_ts, step_dt=current_ts-self._prev_ts, imu_ts=self._currentData.imu_ts,                        
-                                command=command, rpy_rate_cmd=rpyRate_cmd, quat_ned_desbodyfrd_cmd=quat_ned_desbodyfrd_cmd,
-                                counter=counter, destination_ned=trajDest_pos_ned, current_mode=self._currentData.custom_mode_id)
-            
-        # self._hardware_adapter.send_command(quat_cmd=quat_ned_desbodyfrd_cmd, rpy_rate=rpyRate_cmd, thrust=command)
-        self._prev_imu_ts = self._currentData.imu_ts
-        self._prev_ts = current_ts
-        self._prev_pos_ned = self._currentData.pos_ned_m.ned
-        self.prev_quat_ned_desbodyfrd_cmd = quat_ned_desbodyfrd_cmd
-        
         return msg
-        
-            
+
 #################################################################################################################
     def getQuadBodyfrdCamera(self, nedYangle):
         yawCorrection = 0 #np.pi/2
         mat_cam_bodyfrd =  rotZ(-np.pi/2+yawCorrection) @ rotY(np.pi/2) @ rotY(-nedYangle) #   rotZned * rotYned * rotYned
         return Quaternion.from_matrix(mat=mat_cam_bodyfrd.T) 
 
-#################################################################################################################
-    def horz_circle(self, center=np.array([0,0,0]), radius=3, missionAttitudeDirection=None, Vel=1):
-        if missionAttitudeDirection is None:
-            missionAttitudeDirection = np.array([-1, 0, 0])
-        t=time.monotonic()-self._overall_start
-        
-        A = radius
-        B = radius
-        C = 0  #0.2
-
-        R=(A+B)/2
-        L=2*pi*R
-        w=Vel/L
-
-        d = pi / 2 * 0
-
-        a = 2*pi*w  #.1
-        b = 2*pi*w  #.2
-        c = 0*2*pi*w*2  #.2
-
-        # % t = linspace(0, 2*pi, 2*pi*100+1);
-        # % x = A * sin(a * t + d);
-        # % y = B * sin(b * t);
-        # % z = alt + C * cos(2 * t);
-        # % plot3(x, y, z);
-
-        xd =      np.array([A *         sin(a * t + d), B *         cos(b * t), C * cos(c * t)])+center
-        x_dot =  np.array([A * a *      cos(a * t + d), B * b *    -sin(b * t), C * c * -sin(c * t)])
-        x_2dot =  np.array([A * a**2 * -sin(a * t + d), B * b**2 * -cos(b * t), C * c**2 * -cos(c * t)])
-        x_3dot =  np.array([A * a**3 * -cos(a * t + d), B * b**3 *  sin(b * t), C * c**3 * sin(c * t)])
-        x_4dot =  np.array([A * a**4 *  sin(a * t + d), B * b**4 *  cos(b * t), C * c**4 * cos(c * t)])
-
-        b1 = missionAttitudeDirection
-        b1_dot = np.array([0,0,0])  #
-        b1_2dot = np.array([0,0,0])        # w = 2 * pi / 10
-        b1 = np.array([cos(w * t), sin(w * t), 0])
-        # b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
-        # b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
-
-        pos_control = [False, False, True]
-        vel_control = [True, True, False]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (xd, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
-############################################################################################################################
-
-    def pos_point(self, missionPoint=[np.array([0, 0, -30])], missionAttitudeDirection=None):
-        if missionAttitudeDirection is None:
-            missionAttitudeDirection = np.array([-1, 0, 0])
-        
-        t=time.monotonic()-self._overall_start
-        x = missionPoint[0]
-        if len(missionPoint) > 1:
-            T = 10
-            w = 2 * pi / T
-            state = sin(w*t)
-            x = missionPoint[0] + np.sign(state) * (missionPoint[1] - missionPoint[0])
-
-        x_dot = np.array([0,0,0])
-        x_2dot = np.array([0,0,0])
-        x_3dot = np.array([0,0,0])
-        x_4dot = np.array([0,0,0])
-
-        b1 = missionAttitudeDirection
-        b1_dot = np.array([0, 0, 0])
-        b1_2dot = np.array([0, 0, 0])
-        
-        pos_control = [True, True, True]
-        vel_control = [False, False, False]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
-################################################################################################################
-
-    def vel_point(self, missionVelocity=np.array([1, 0, 0]), missionAttitudeDirection=None):
-        if missionAttitudeDirection is None:
-            missionAttitudeDirection = np.array([-1, 0, 0])
-            
-        t=time.monotonic()-self._overall_start
-        
-        x = np.array([0, 0, 0])
-        x_dot = missionVelocity
-        x_2dot = np.array([0,0,0])
-        x_3dot = np.array([0,0,0])
-        x_4dot = np.array([0,0,0])
-
-        b1 = missionAttitudeDirection
-        b1_dot = np.array([0, 0, 0])
-        b1_2dot = np.array([0, 0, 0])
-        
-        pos_control = [False, False, False]
-        vel_control = [True, True, True]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
-################################################################################################################
-
-    def lineConstVel(self, startPoint, endPoint, speed, startTime, missionAttitudeDirection=None):
-        if missionAttitudeDirection is None:
-            missionAttitudeDirection = np.array([-1, 0, 0])
-            
-        finished = False
-        t=time.monotonic()-startTime
-        
-        deltaDistance = endPoint-startPoint
-        deltaDir = unitVec(deltaDistance)
-        deltaDistance = np.linalg.norm(deltaDistance)
-        velocity = deltaDir * speed
-        x = startPoint + t*velocity
-        x_dot = velocity
-        if t*speed > deltaDistance:
-            x = endPoint
-            x_dot = np.array([0,0,0])
-            finished = True
-        x_2dot = np.array([0,0,0])
-        x_3dot = np.array([0,0,0])
-        x_4dot = np.array([0,0,0])
-
-        b1 = missionAttitudeDirection
-        b1_dot = np.array([0, 0, 0])
-        b1_2dot = np.array([0, 0, 0])
-        
-        pos_control = [True, True, True]
-        vel_control = [t*speed < deltaDistance, t*speed < deltaDistance, t*speed < deltaDistance]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control), finished
-##############################################################################################################
-    def vert_circle(self):
-
-        t=time.monotonic()-self._overall_start
-        
-        Vel=3
-
-        A = 5
-        B = 5
-        C = 0  #0.2
-
-        R=(A+B)/2
-        L=2*pi*R
-        w=Vel/L
-
-        d = pi / 2 * 0
-
-        a = 2*pi*w  #.1
-        b = 2*pi*w  #.2
-        c = 2*pi*w*2  #.2
-        alt = -20
-
-        # % t = linspace(0, 2*pi, 2*pi*100+1);
-        # % x = A * sin(a * t + d);
-        # % y = B * sin(b * t);
-        # % z = alt + C * cos(2 * t);
-        # % plot3(x, y, z);
-
-        x =      np.array([C * cos(c * t),         A *         sin(a * t + d), B *         cos(b * t), alt + C * cos(c * t)])
-        x_dot =  np.array([C * c * -sin(c * t),    A * a *     cos(a * t + d), B * b *    -sin(b * t)])
-        x_2dot =  np.array([C * c**2 * -cos(c * t), A * a**2 * -sin(a * t + d), B * b**2 * -cos(b * t)])
-        x_3dot =  np.array([C * c**3 *  sin(c * t), A * a**3 * -cos(a * t + d), B * b**3 *  sin(b * t)])
-        x_4dot =  np.array([C * c**4 *  cos(c * t), A * a**4 *  sin(a * t + d), B * b**4 *  cos(b * t)])
-
-        b1 = np.array([1,0,0])
-        b1_dot = np.array([0,0,0])  #
-        b1_2dot = np.array([0,0,0])        # w = 2 * pi / 10
-        # self.b1d = np.array([cos(w * t), sin(w * t), 0])
-        # self.b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
-        # self.b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
-
-        pos_control = [False, False, False]
-        vel_control = [True, True, True]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
-###############################################################################################################
-    
-    def command_Lissajous(self, t=None):
-        if t is None:
-            t=time.monotonic()-self._overall_start
-        
-        # Lissajous curve
-        # x=A*sin(a*t+d), y=B*sin(b*t), z=alt+C*cos(c*t)
-        # several common parameters:
-        # a:b   d    0       pi/4      pi/2      3/4*pi    pi
-        # 1:1        /      ellipse   circle    ellipce    \
-        # 1:2        )      8-figure  8-figure  8-figure   (
-        # 1:3        S      
-        
-        A = 15   # X amplitude
-        B = 15   # Y amplitude
-        C = 5 # Z amplitude
-        alt = -1  # Z offset
-
-        d = pi / 2 * 0
-
-        a = .2*1.5  # X frequency
-        b = .3*1.5  # Y frequency
-        c = .2    # Z frequency
-        w = 2 * pi / 10  # attitude rotation frequency
-        (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot) = lissajous_func(t, A=A, B=B, C=C, a=a, b=b, c=c, alt=alt, w = w)
-        
-        pos_control = [False, False, False]
-        vel_control = [True, True, True]
-        yaw_control = YAW_COMMAND.DEFINED_DIR
-        return (x, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
 #################################################################################################################
     def _serialize_vel_cmd(self, vel_cmd, yaw_cmd, yaw_rate_cmd):
         """
