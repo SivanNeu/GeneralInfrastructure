@@ -161,8 +161,8 @@ class System_Manager():
             try:
                 # Serialize test command to binary format
                 test_cmd_data = self._serialize_vel_cmd([0.0, 0.0, 0.0], 0.0, 0.0)
-                # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + test_cmd_data)
+                # Send as multipart message (topic + data) for proper ZMQ subscription filtering
+                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, test_cmd_data])
                 print(f"System_Manager: Sent test command message #{i+1}")
                 time.sleep(0.1)  # Small delay between test messages
             except Exception as e:
@@ -427,8 +427,8 @@ class System_Manager():
             try:
                 # Serialize to binary format for C code
                 cmd_data = self._serialize_vel_cmd(command, yawCmd, yawCmdRate)
-                # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
+                # Send as multipart message (topic + data) for proper ZMQ subscription filtering
+                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, cmd_data])
                 self._cmd_send_count += 1
                 # Debug: Print first few commands sent
                 if self._cmd_send_count <= 5:
@@ -445,8 +445,8 @@ class System_Manager():
             try:
                 # Serialize to binary format for C code
                 cmd_data = self._serialize_vel_cmd(command_ned, yawCmd, yawCmdRate*self.yawCommandFactor)
-                # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
+                # Send as multipart message (topic + data) for proper ZMQ subscription filtering
+                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, cmd_data])
                 self._cmd_send_count += 1
                 # Debug: Print first few commands sent
                 if self._cmd_send_count <= 5:
@@ -460,9 +460,9 @@ class System_Manager():
         
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
             msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
-            # Send as single-part message with topic prefix
+            # Send as multipart message (topic + data) for proper ZMQ subscription filtering
             try:
-                self.pubSock.send(zmqTopics.topicGuidenceCmdAcc + pickle.dumps(msg))
+                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAcc, pickle.dumps(msg)])
                 self._cmd_send_count += 1
             except Exception as e:
                 print(f"Error sending acceleration command: {e}")
@@ -479,8 +479,8 @@ class System_Manager():
                 else:
                     thrust_val = 0.0
                 cmd_data = self._serialize_attitude_cmd(thrust_val, rpyRate_cmd, quat_ned_desbodyfrd_cmd, self.rateControlEnabled)
-                # Send as single-part message with topic prefix
-                self.pubSock.send(zmqTopics.topicGuidenceCmdAttitude + cmd_data)
+                # Send as multipart message (topic + data) for proper ZMQ subscription filtering
+                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdAttitude, cmd_data])
                 self._cmd_send_count += 1
                 # Populate msg for return value
                 msg = { 'ts': time.monotonic(), 'thrustCmd':thrust_val, 'rpyRateCmd':rpyRate_cmd,

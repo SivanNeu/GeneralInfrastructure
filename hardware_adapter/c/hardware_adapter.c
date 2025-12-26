@@ -175,31 +175,15 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
     // Subscribe to all command topics
     printf("Hardware_adapter: Subscribing to command topics...\n");
     
-    // CRITICAL: For single-part messages with topic prefix, ZMQ SUBSCRIBE filters at transport level
-    // We need to subscribe to each topic prefix exactly as it appears in the message
-    // First, try subscribing to empty string to receive ALL messages (for debugging)
-    printf("Hardware_adapter: Testing: Subscribing to empty string to receive all messages...\n");
+    // CRITICAL: For multipart messages, subscribe to empty string to receive ALL messages
+    // The receive function will handle topic detection and filtering
+    // This avoids issues with ZMQ subscription filters potentially stripping topic frames
+    printf("Hardware_adapter: Subscribing to empty string to receive all messages (topic filtering done in receive function)...\n");
     if (zmq_subscriber_subscribe(adapter->sub_socket, "") != 0) {
         fprintf(stderr, "Failed to subscribe to empty string (all messages)\n");
+        return -1;
     }
-    
-    // Also subscribe to specific topics
-    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ATTITUDE) != 0) {
-        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ATTITUDE);
-    }
-    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_NED) != 0) {
-        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_VEL_NED);
-    }
-    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_BODY) != 0) {
-        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_VEL_BODY);
-    }
-    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ACC) != 0) {
-        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ACC);
-    }
-    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ARM) != 0) {
-        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ARM);
-    }
-    printf("Hardware_adapter: All topic subscriptions completed\n");
+    printf("Hardware_adapter: Successfully subscribed to all messages\n");
     
     // Wait for subscriber to connect and for publisher to be ready
     // Note: In ZMQ PUB/SUB, messages sent before subscriber connects are lost

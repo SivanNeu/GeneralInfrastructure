@@ -91,13 +91,16 @@ def test_command_publishing():
     }
     
     try:
-        # Send as single-part message with topic prefix
-        pub_sock.send(zmqTopics.topicGuidenceCmdVelNed + pickle.dumps(test_msg))
+        # Send as multipart message (topic + data) - matches system_manager format
+        pub_sock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, pickle.dumps(test_msg)])
         print(f"✓ SUCCESS: Sent test command message")
         print(f"  If hardware_adapter is running, it should receive this message")
-        print(f"  (Using single-part message with topic prefix)")
+        print(f"  (Using multipart message format: topic frame + data frame)")
+        print(f"  Topic: {zmqTopics.topicGuidenceCmdVelNed}")
     except Exception as e:
         print(f"✗ ERROR: Failed to send message: {e}")
+        import traceback
+        traceback.print_exc()
     
     pub_sock.close()
     context.term()
