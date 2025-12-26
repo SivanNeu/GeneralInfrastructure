@@ -148,22 +148,28 @@ class System_Manager():
 
         self._currentData = Flight_Data()
         self.trackData = None
-        self.pubSock = zmqWrapper.publisher(zmqTopics.topicGuidenceCmdPort)
+        # Use '*' to bind to all interfaces (standard for PUB sockets)
+        self.pubSock = zmqWrapper.publisher(zmqTopics.topicGuidenceCmdPort, ip='*')
         print(f"System_Manager: Publishing commands on port: {zmqTopics.topicGuidenceCmdPort}")
-        # Give publisher time to bind
-        time.sleep(0.1)
+        # Give publisher time to bind (ZMQ PUB sockets need time to establish)
+        time.sleep(0.5)  # Increased to 500ms for PUB socket to be ready
         
-        # Send a test message to verify connection
-        try:
-            # Serialize test command to binary format
-            test_cmd_data = self._serialize_vel_cmd([0.0, 0.0, 0.0], 0.0, 0.0)
-            # Send as single-part message with topic prefix
-            self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + test_cmd_data)
-            print(f"System_Manager: Sent test command message to verify connection")
-        except Exception as e:
-            print(f"System_Manager: ERROR - Failed to send test command: {e}")
-            import traceback
-            traceback.print_exc()
+        # Send multiple test messages to verify connection
+        # ZMQ PUB/SUB has a "slow joiner" problem - messages sent before subscriber connects are lost
+        print(f"System_Manager: Sending test messages to verify connection...")
+        for i in range(5):
+            try:
+                # Serialize test command to binary format
+                test_cmd_data = self._serialize_vel_cmd([0.0, 0.0, 0.0], 0.0, 0.0)
+                # Send as single-part message with topic prefix
+                self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + test_cmd_data)
+                print(f"System_Manager: Sent test command message #{i+1}")
+                time.sleep(0.1)  # Small delay between test messages
+            except Exception as e:
+                print(f"System_Manager: ERROR - Failed to send test command #{i+1}: {e}")
+                import traceback
+                traceback.print_exc()
+        print(f"System_Manager: Test messages sent. If hardware_adapter is running, it should receive them.")
         
         # Test receiving a message (wait a bit for hardware_adapter to start publishing)
         print("System_Manager: Testing subscriber connection...")
@@ -250,8 +256,9 @@ class System_Manager():
             # (not self._currentData.gathered['tracker_px']):
                 # Only print warning occasionally to avoid spam
                 if not hasattr(self, '_last_missing_data_warning') or (time.monotonic() - self._last_missing_data_warning) > 2.0:
-                    print(f'-return-0- (Missing flight data. Gathered flags: quat={self._currentData.gathered.get("quat_ned_bodyfrd", False)}, pos={self._currentData.gathered.get("pos_ned_m", False)}, imu={self._currentData.gathered.get("imu_ned", False)})')
-                    print(f'  System_manager: Check if hardware_adapter is publishing on port {zmqTopics.topicMavlinkPort}')
+                    print(f'System_Manager: -return-0- (Missing flight data. Gathered flags: quat={self._currentData.gathered.get("quat_ned_bodyfrd", False)}, pos={self._currentData.gathered.get("pos_ned_m", False)}, imu={self._currentData.gathered.get("imu_ned", False)})')
+                    print(f'  System_Manager: Cannot send commands without flight data. Check if hardware_adapter is publishing on port {zmqTopics.topicMavlinkPort}')
+                    print(f'  System_Manager: This is why hardware_adapter is not receiving commands - system_manager is waiting for flight data first')
                     self._last_missing_data_warning = time.monotonic()
                 return
         else:
@@ -423,10 +430,15 @@ class System_Manager():
                 # Send as single-part message with topic prefix
                 self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
                 self._cmd_send_count += 1
+                # Debug: Print first few commands sent
+                if self._cmd_send_count <= 5:
+                    print(f"System_Manager: Sent velocity command #{self._cmd_send_count}: vel={command}, yaw={yawCmd}, yaw_rate={yawCmdRate}")
                 # Populate msg for return value
                 msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
-                print(f"Error sending velocity command: {e}")
+                print(f"System_Manager: ERROR sending velocity command: {e}")
+                import traceback
+                traceback.print_exc()
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
             command_ned = command
             latest_cmd_for_debug = command_ned
@@ -436,10 +448,15 @@ class System_Manager():
                 # Send as single-part message with topic prefix
                 self.pubSock.send(zmqTopics.topicGuidenceCmdVelNed + cmd_data)
                 self._cmd_send_count += 1
+                # Debug: Print first few commands sent
+                if self._cmd_send_count <= 5:
+                    print(f"System_Manager: Sent velocity RL command #{self._cmd_send_count}: vel={command_ned}, yaw={yawCmd}, yaw_rate={yawCmdRate*self.yawCommandFactor}")
                 # Populate msg for return value
                 msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
-                print(f"Error sending velocity RL command: {e}")
+                print(f"System_Manager: ERROR sending velocity RL command: {e}")
+                import traceback
+                traceback.print_exc()
         
         elif self._controlMain.controlnode.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
             msg = { 'ts': time.monotonic(), 'accCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
@@ -792,9 +809,16 @@ class System_Manager():
         try:
             # Try to deserialize as pickle first (for backward compatibility)
             try:
-                return pickle.loads(data_bytes)
+                from common import Flight_Data
+                data = pickle.loads(data_bytes)
+                # Validate that pickle returned a Flight_Data object
+                if isinstance(data, Flight_Data):
+                    return data
+                else:
+                    # Pickle succeeded but returned wrong type, try binary format
+                    raise ValueError(f"Pickle deserialization returned {type(data)}, expected Flight_Data")
             except (pickle.UnpicklingError, ValueError, TypeError):
-                # Not pickle format, try binary format
+                # Not pickle format or wrong type, try binary format
                 pass
             
             # Deserialize binary format
@@ -932,8 +956,14 @@ class System_Manager():
             
         except Exception as e:
             # If deserialization fails, try pickle as fallback
+            # But validate the result is a Flight_Data object
             try:
-                return pickle.loads(data_bytes)
+                from common import Flight_Data
+                data = pickle.loads(data_bytes)
+                if isinstance(data, Flight_Data):
+                    return data
+                else:
+                    raise ValueError(f"Pickle fallback returned {type(data)}, expected Flight_Data")
             except:
                 raise ValueError(f"Failed to deserialize flight data: {e}")
 

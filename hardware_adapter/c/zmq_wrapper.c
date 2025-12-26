@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 static void* zmq_context = NULL;
 
@@ -103,7 +104,7 @@ void* zmq_subscriber_create(int port) {
     int conflate = 1;
     zmq_setsockopt(socket, ZMQ_CONFLATE, &conflate, sizeof(conflate));
     
-    // Set receive timeout
+    // Set receive timeout (but ZMQ_DONTWAIT will override this in receive calls)
     int timeout = 100;  // 100ms
     zmq_setsockopt(socket, ZMQ_RCVTIMEO, &timeout, sizeof(timeout));
     
@@ -116,6 +117,8 @@ void* zmq_subscriber_create(int port) {
         return NULL;
     }
     
+    printf("Hardware_adapter: ZMQ subscriber connected to %s\n", address);
+    
     return socket;
 }
 
@@ -126,11 +129,24 @@ void zmq_subscriber_destroy(void* socket) {
 }
 
 int zmq_subscriber_subscribe(void* socket, const char* topic) {
-    if (socket == NULL || topic == NULL) {
+    if (socket == NULL) {
         return -1;
     }
     
-    return zmq_setsockopt(socket, ZMQ_SUBSCRIBE, topic, strlen(topic));
+    // Empty string means subscribe to all messages
+    size_t topic_len = (topic == NULL) ? 0 : strlen(topic);
+    int result = zmq_setsockopt(socket, ZMQ_SUBSCRIBE, topic == NULL ? "" : topic, topic_len);
+    if (result == 0) {
+        if (topic == NULL || topic_len == 0) {
+            printf("Hardware_adapter: Successfully subscribed to ALL messages (empty filter)\n");
+        } else {
+            printf("Hardware_adapter: Successfully subscribed to topic: %s (length: %zu)\n", topic, topic_len);
+        }
+    } else {
+        fprintf(stderr, "Hardware_adapter: Failed to subscribe to topic %s: %s\n", 
+                topic == NULL ? "(empty)" : topic, zmq_strerror(zmq_errno()));
+    }
+    return result;
 }
 
 int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer_size,
@@ -146,8 +162,18 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
     zmq_msg_t msg;
     zmq_msg_init(&msg);
     
-    int result = zmq_msg_recv(&msg, socket, ZMQ_DONTWAIT);
+    // Use blocking receive if timeout > 0, otherwise non-blocking
+    int flags = (timeout_ms > 0) ? 0 : ZMQ_DONTWAIT;
+    int result = zmq_msg_recv(&msg, socket, flags);
     if (result < 0) {
+        int err = zmq_errno();
+        // Only log errors occasionally to avoid spam (ETIMEDOUT is expected when no messages)
+        static int error_count = 0;
+        if (err != EAGAIN && err != ETIMEDOUT) {
+            if (error_count++ % 1000 == 0) {
+                fprintf(stderr, "Hardware_adapter: zmq_msg_recv error: %s (errno=%d)\n", zmq_strerror(err), err);
+            }
+        }
         zmq_msg_close(&msg);
         return -1;
     }
@@ -177,8 +203,27 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
     }
     
     if (found_topic == NULL) {
+        // Debug: Log ALL unmatched messages (this is important for debugging)
+        static int unmatched_count = 0;
+        unmatched_count++;
+        // Print first 50 bytes of message for debugging
+        size_t debug_len = (msg_size < 50) ? msg_size : 50;
+        printf("Hardware_adapter: Received message #%d with unknown topic prefix (size=%zu, first %zu bytes: ", unmatched_count, msg_size, debug_len);
+        for (size_t i = 0; i < debug_len; i++) {
+            if (msg_data[i] >= 32 && msg_data[i] < 127) {
+                printf("%c", msg_data[i]);
+            } else {
+                printf("\\x%02x", (unsigned char)msg_data[i]);
+            }
+        }
+        printf(")\n");
+        printf("Hardware_adapter: Expected topics: %s, %s, %s, %s, %s\n",
+                TOPIC_GUIDANCE_CMD_ATTITUDE, TOPIC_GUIDANCE_CMD_VEL_NED,
+                TOPIC_GUIDANCE_CMD_VEL_BODY, TOPIC_GUIDANCE_CMD_ACC, TOPIC_GUIDANCE_CMD_ARM);
         zmq_msg_close(&msg);
-        return -1;
+        // Return a special value to indicate message was received but unmatched
+        // We'll use -2 to distinguish from -1 (no message)
+        return -2;
     }
     
     // Copy topic

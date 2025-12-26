@@ -173,14 +173,37 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
     }
     
     // Subscribe to all command topics
-    zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ATTITUDE);
-    zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_NED);
-    zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_BODY);
-    zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ACC);
-    zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ARM);
+    printf("Hardware_adapter: Subscribing to command topics...\n");
     
-    // Wait for subscriber to connect
-    usleep(100000);  // 100ms
+    // CRITICAL: For single-part messages with topic prefix, ZMQ SUBSCRIBE filters at transport level
+    // We need to subscribe to each topic prefix exactly as it appears in the message
+    // First, try subscribing to empty string to receive ALL messages (for debugging)
+    printf("Hardware_adapter: Testing: Subscribing to empty string to receive all messages...\n");
+    if (zmq_subscriber_subscribe(adapter->sub_socket, "") != 0) {
+        fprintf(stderr, "Failed to subscribe to empty string (all messages)\n");
+    }
+    
+    // Also subscribe to specific topics
+    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ATTITUDE) != 0) {
+        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ATTITUDE);
+    }
+    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_NED) != 0) {
+        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_VEL_NED);
+    }
+    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_VEL_BODY) != 0) {
+        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_VEL_BODY);
+    }
+    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ACC) != 0) {
+        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ACC);
+    }
+    if (zmq_subscriber_subscribe(adapter->sub_socket, TOPIC_GUIDANCE_CMD_ARM) != 0) {
+        fprintf(stderr, "Failed to subscribe to %s\n", TOPIC_GUIDANCE_CMD_ARM);
+    }
+    printf("Hardware_adapter: All topic subscriptions completed\n");
+    
+    // Wait for subscriber to connect and for publisher to be ready
+    // Note: In ZMQ PUB/SUB, messages sent before subscriber connects are lost
+    usleep(500000);  // 500ms to ensure connection is established
     
     // Initialize control flags
     adapter->mavlink_connected_to_usb = false;
@@ -619,13 +642,33 @@ void* hardware_adapter_command_thread_func(void* arg) {
     double last_warning_time = 0.0;
     bool has_received_command = false;
     const double WARNING_INTERVAL = 5.0;  // Print warning every 5 seconds if no commands
+    static int total_receive_attempts = 0;
+    static int successful_receives = 0;
+    static int unmatched_messages = 0;
     
     printf("Hardware_adapter: Command thread started, waiting for commands...\n");
+    printf("Hardware_adapter: Subscribed to topics on port %d: %s, %s, %s, %s, %s\n",
+           TOPIC_GUIDANCE_CMD_PORT,
+           TOPIC_GUIDANCE_CMD_ATTITUDE, TOPIC_GUIDANCE_CMD_VEL_NED,
+           TOPIC_GUIDANCE_CMD_VEL_BODY, TOPIC_GUIDANCE_CMD_ACC, TOPIC_GUIDANCE_CMD_ARM);
     
     clock_gettime(CLOCK_MONOTONIC, &ts);
     double start_time = ts.tv_sec + ts.tv_nsec / 1e9;
     last_command_time = start_time;
     last_warning_time = start_time;  // Initialize to start time so first warning happens after 5 seconds
+    
+    // Test connection by trying to receive a message (blocking for 2 seconds)
+    printf("Hardware_adapter: Testing connection - waiting up to 2 seconds for a message...\n");
+    int test_len = zmq_subscriber_receive(adapter->sub_socket, topic_buffer, sizeof(topic_buffer),
+                                         data_buffer, sizeof(data_buffer), 2000);
+    if (test_len >= 0) {
+        printf("Hardware_adapter: SUCCESS - Received test message! Topic: %s, len: %d\n", topic_buffer, test_len);
+    } else if (test_len == -2) {
+        printf("Hardware_adapter: Received message but topic didn't match (this is OK, means connection works)\n");
+    } else {
+        printf("Hardware_adapter: WARNING - No message received in 2 seconds. Connection may not be established.\n");
+        printf("Hardware_adapter: Check that system_manager is running and publishing on port %d\n", TOPIC_GUIDANCE_CMD_PORT);
+    }
     
     while (adapter->running) {
         int data_len = zmq_subscriber_receive(adapter->sub_socket, topic_buffer, sizeof(topic_buffer),
@@ -633,6 +676,15 @@ void* hardware_adapter_command_thread_func(void* arg) {
         
         clock_gettime(CLOCK_MONOTONIC, &ts);
         double current_time = ts.tv_sec + ts.tv_nsec / 1e9;
+        
+        total_receive_attempts++;
+        
+        if (data_len == -2) {
+            // Message received but topic didn't match
+            unmatched_messages++;
+            usleep(1000);
+            continue;
+        }
         
         if (data_len < 0) {
             // Check if we should print a warning about no commands
@@ -642,11 +694,15 @@ void* hardware_adapter_command_thread_func(void* arg) {
             
             if (time_since_last_command >= WARNING_INTERVAL && time_since_last_warning >= WARNING_INTERVAL) {
                 if (has_received_command) {
-                    printf("Hardware_adapter: WARNING - No MAVLink commands received for %.1f seconds\n",
+                    printf("Hardware_adapter: WARNING - No guidance commands received for %.1f seconds (check if system_manager is sending commands)\n",
                            time_since_last_command);
                 } else {
-                    printf("Hardware_adapter: WARNING - No MAVLink commands received since startup (%.1f seconds)\n",
-                           time_since_last_command);
+                    printf("Hardware_adapter: WARNING - No guidance commands received since startup (%.1f seconds). Waiting for commands on port %d, topics: %s, %s, %s, %s, %s\n",
+                           time_since_last_command, TOPIC_GUIDANCE_CMD_PORT,
+                           TOPIC_GUIDANCE_CMD_ATTITUDE, TOPIC_GUIDANCE_CMD_VEL_NED,
+                           TOPIC_GUIDANCE_CMD_VEL_BODY, TOPIC_GUIDANCE_CMD_ACC, TOPIC_GUIDANCE_CMD_ARM);
+                    printf("Hardware_adapter: DEBUG - Total receive attempts: %d, Successful: %d, Unmatched: %d\n",
+                           total_receive_attempts, successful_receives, unmatched_messages);
                 }
                 last_warning_time = current_time;
             }
@@ -654,8 +710,13 @@ void* hardware_adapter_command_thread_func(void* arg) {
             continue;
         }
         
+        successful_receives++;
+        
         // Update last command time when we receive a command
         last_command_time = current_time;
+        if (!has_received_command) {
+            printf("Hardware_adapter: First command received! Topic: %s, data_len: %d\n", topic_buffer, data_len);
+        }
         has_received_command = true;
         
         // Process command based on topic
