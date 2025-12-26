@@ -385,9 +385,11 @@ void hardware_adapter_parse(hardware_adapter_t* adapter, const char* msg_type, v
     if (strcmp(msg_type, "HEARTBEAT") == 0) {
         mavlink_heartbeat_t heartbeat;
         mavlink_msg_heartbeat_decode(msg, &heartbeat);
-        adapter->current_data.custom_mode_id = heartbeat.custom_mode;
-        adapter->current_data.gathered.custom_mode_id = true;
-        // Note: mode string would need to be converted from custom_mode_id
+        if(heartbeat.custom_mode != 0) {
+            adapter->current_data.custom_mode_id = heartbeat.custom_mode;
+            adapter->current_data.gathered.custom_mode_id = true;
+            // Note: mode string would need to be converted from custom_mode_id
+        }
     }
     else if (strcmp(msg_type, "ATTITUDE_QUATERNION") == 0) {
         mavlink_attitude_quaternion_t att_quat;

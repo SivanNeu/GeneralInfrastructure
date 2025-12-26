@@ -1,6 +1,7 @@
 from matrix_utils import hat, vee, deriv_unit_vector, saturate
 from integral_utils import IntegralError, IntegralErrorVec3
 from common import CONTROLLER_TYPE, YAW_COMMAND_TYPE
+from low_pass_filter import Low_Pass_Filter, LPF_TYPE
 
 import time
 import numpy as np
@@ -16,7 +17,7 @@ class VelocityPIDControllerParameters:
         # Position gains
         commonFactor = 2
         self.kX = np.diag([1.0, 1.0, 1.0])*commonFactor  # Position gains
-        self.kV = np.diag([0.8, 0.8, 1.0])*commonFactor # Velocity gains
+        self.kV = np.diag([0.8, 0.8, 1.0])*commonFactor*0 # Velocity gains
         # Integral gains
         self.kIX = np.diag([0, 0, 0])*commonFactor # Position integral gains
         self.kIV = np.diag([1, 1, 1])*0 # Velocity integral gains
@@ -26,7 +27,7 @@ class VelocityPIDControllerParameters:
         self.sat_sigmaX = 3
         self.sat_sigmaV = 3
         
-        self.keYaw = 1.0
+        self.keYaw = 1
         self.keYawRate = 0.01
         self.keYawIntegral = 1.0*0
         self.sat_sigmaYaw = 3
@@ -65,6 +66,8 @@ class VelocityPIDController:
         self.prev_eYaw = None
         self.eYawRate = 0.0
         self.eYawIntegral = 0.0
+        # yaw rate filter to avoid noise, high alhpha => more smoothing
+        self.eYawRateFilter = Low_Pass_Filter(alpha=0.2, is_angle=True, type = LPF_TYPE.FIRST_ORDER)
 
         # derivative errors
         self.eDV = np.zeros(3)      # Derivative of velocity error
@@ -123,11 +126,11 @@ class VelocityPIDController:
         if self.yawCommandType == YAW_COMMAND_TYPE.RATE:
             b1d_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(b1d)
             self.eYaw = np.arctan2(b1d_bodyfrd[1], b1d_bodyfrd[0])
-            self.eYawRate = (self.eYaw - self.prev_eYaw) / self.dt if self.prev_eYaw is not None and self.dt > 0.0 else 0.0
+            self.eYawRate = self.eYawRateFilter.step((self.eYaw - self.prev_eYaw) / self.dt) if self.prev_eYaw is not None and self.dt > 0.0 else 0.0
             self.prev_eYaw = self.eYaw  
             self.eYawIntegral += self.eYaw * self.dt
             self.eYawIntegral = np.clip(self.eYawIntegral, -self.param.sat_sigmaYaw, self.param.sat_sigmaYaw)
-            yaw_command = self.param.keYaw * self.eYaw + self.param.keYawRate * self.eYawRate + self.param.keYawIntegral * self.eYawIntegral
+            yaw_command = self.param.keYaw * self.eYaw - self.param.keYawRate * self.eYawRate + self.param.keYawIntegral * self.eYawIntegral
             
  # f_total or desired velocity, R_desired, Omega_desired_frd 
         return velocity_command, np.eye(3), np.array([0.0, 0.0, yaw_command]), obs

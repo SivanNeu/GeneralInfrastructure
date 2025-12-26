@@ -98,7 +98,7 @@ class System_Manager():
         ##############################
         factor = 1
         self.referencePoint = np.array([ 0, 0, 0])
-        self.desiredHeadingDir_ned = np.array([1, 1, 0])
+        self.desiredHeadingDir_ned = np.array([-1, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
         self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
@@ -723,7 +723,7 @@ class System_Manager():
             data.current_thrust = doubles[idx]; idx += 1
             
             # Quaternion
-            data.quat_ned_bodyfrd = Quaternion(doubles[idx+1], doubles[idx+2], doubles[idx+3], doubles[idx])  # x, y, z, w
+            data.quat_ned_bodyfrd = Quaternion(x=doubles[idx], y=doubles[idx+1], z=doubles[idx+2], w=doubles[idx+3])  # x, y, z, w
             data.quat_ned_bodyfrd.timestamp = doubles[idx+4]
             idx += 5
             
