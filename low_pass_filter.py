@@ -47,14 +47,14 @@ class Low_Pass_Filter():
             self._prev_filtered_output = (1-self._alpha) * self._prev_filtered_output + (self._alpha)*data_pt
         return self._prev_filtered_output
 
-if __name__ == '__main__':
-    import numpy as np
-    filter = Low_Pass_Filter(alpha=0.8, is_angle=True, type = LPF_TYPE.FIRST_ORDER)
-    out = filter.step(np.radians(4))
-    print(np.degrees(out))
-    out = filter.step(np.radians(20))
-    print(np.degrees(out))
-    out = filter.step(np.radians(40))
-    print(np.degrees(out))
-    out = filter.step(np.radians(30))
-    print("30", np.degrees(out))
+# if __name__ == '__main__':
+#     import numpy as np
+#     filter = Low_Pass_Filter(alpha=0.8, is_angle=True, type = LPF_TYPE.FIRST_ORDER)
+#     out = filter.step(np.radians(4))
+#     print(np.degrees(out))
+#     out = filter.step(np.radians(20))
+#     print(np.degrees(out))
+#     out = filter.step(np.radians(40))
+#     print(np.degrees(out))
+#     out = filter.step(np.radians(30))
+#     print("30", np.degrees(out))

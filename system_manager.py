@@ -111,7 +111,7 @@ class System_Manager():
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
         self.circleRadius = 5*factor
-        self.controllerType = CONTROLLER_TYPE.VELOCITYPID
+        self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         self.yawCommandType = YAW_COMMAND_TYPE.RATE
         
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
@@ -155,42 +155,6 @@ class System_Manager():
         # Give publisher time to bind (ZMQ PUB sockets need time to establish)
         time.sleep(0.5)  # Increased to 500ms for PUB socket to be ready
         
-        # Send multiple test messages to verify connection
-        # ZMQ PUB/SUB has a "slow joiner" problem - messages sent before subscriber connects are lost
-        print(f"System_Manager: Sending test messages to verify connection...")
-        for i in range(5):
-            try:
-                # Serialize test command to binary format
-                test_cmd_data = self._serialize_vel_cmd([0.0, 0.0, 0.0], 0.0, 0.0)
-                # Send as multipart message (topic + data) for proper ZMQ subscription filtering
-                self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, test_cmd_data])
-                print(f"System_Manager: Sent test command message #{i+1}")
-                time.sleep(0.1)  # Small delay between test messages
-            except Exception as e:
-                print(f"System_Manager: ERROR - Failed to send test command #{i+1}: {e}")
-                import traceback
-                traceback.print_exc()
-        print(f"System_Manager: Test messages sent. If hardware_adapter is running, it should receive them.")
-        
-        # Test receiving a message (wait a bit for hardware_adapter to start publishing)
-        print("System_Manager: Testing subscriber connection...")
-        time.sleep(0.5)  # Give hardware_adapter time to start publishing
-        test_receive_count = 0
-        for i in range(10):
-            try:
-                test_msg = self.subsSock.recv(zmq.NOBLOCK)  # Single-part message with topic prefix
-                if test_msg.startswith(zmqTopics.topicMavlinkFlightData):
-                    test_receive_count += 1
-            except zmq.Again:
-                pass
-            except Exception as e:
-                print(f"System_Manager: Error testing subscriber: {e}")
-                break
-        if test_receive_count > 0:
-            print(f"System_Manager: Successfully received {test_receive_count} test messages from hardware_adapter!")
-        else:
-            print(f"System_Manager: WARNING - No messages received during test. Is hardware_adapter publishing?")
-
         ##self._control.reset(thrust=self._hardware_adapter.get_current_thrust(), yaw=self._hardware_adapter.get_current_yaw())
         self._current_pos_lla = LLA(timestamp=0, lla=np.zeros(3))
 
@@ -529,8 +493,8 @@ class System_Manager():
                 self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, cmd_data])
                 self._cmd_send_count += 1
                 # Debug: Print first few commands sent
-                if self._cmd_send_count <= 5:
-                    print(f"System_Manager: Sent velocity command #{self._cmd_send_count}: vel={command}, yaw={yawCmd}, yaw_rate={yawCmdRate}")
+                #if self._cmd_send_count <= 5:
+                #    print(f"System_Manager: Sent velocity command #{self._cmd_send_count}: vel={command}, yaw={yawCmd}, yaw_rate={yawCmdRate}")
                 # Populate msg for return value
                 msg = { 'ts': time.monotonic(), 'velCmd':command, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
@@ -546,8 +510,8 @@ class System_Manager():
                 self.pubSock.send_multipart([zmqTopics.topicGuidenceCmdVelNed, cmd_data])
                 self._cmd_send_count += 1
                 # Debug: Print first few commands sent
-                if self._cmd_send_count <= 5:
-                    print(f"System_Manager: Sent velocity RL command #{self._cmd_send_count}: vel={command_ned}, yaw={yawCmd}, yaw_rate={yawCmdRate*self.yawCommandFactor}")
+                #if self._cmd_send_count <= 5:
+                #    print(f"System_Manager: Sent velocity RL command #{self._cmd_send_count}: vel={command_ned}, yaw={yawCmd}, yaw_rate={yawCmdRate*self.yawCommandFactor}")
                 # Populate msg for return value
                 msg = { 'ts': time.monotonic(), 'velCmd':command_ned, 'yawCmd':yawCmd, 'yawRateCmd':yawCmdRate*self.yawCommandFactor, 'message_count':self.message_count, 'message_ts':time.monotonic()}
             except Exception as e:
@@ -634,6 +598,7 @@ class System_Manager():
                struct.pack('<2B', yaw_valid, yaw_rate_valid) + \
                b'\x00\x00'  # padding
     
+#################################################################################################################
     def _serialize_attitude_cmd(self, thrust_cmd, rpy_rate_cmd, quat_cmd, is_rate):
         """
         Serialize attitude command to binary format for C code.
@@ -861,20 +826,6 @@ class System_Manager():
                 # print(f"System_manager: message count {data.message_count}, message delay {curTime - data.local_ts}")
                 # No need to check topic - we only subscribe to one topic (topicMavlinkFlightData)
                 
-                # # Debug: Track successful receives
-                # if not hasattr(self, '_data_receive_count'):
-                #     self._data_receive_count = 0
-                #     self._last_data_receive_debug_time = time.monotonic()
-                #     self._last_no_data_warning_time = 0
-                # self._data_receive_count += 1
-                # currentTime = time.monotonic()
-                # if currentTime - self._last_data_receive_debug_time > 2.0:
-                #     print(f"System_manager: Received {self._data_receive_count} flight data messages in last 2s")
-                #     self._data_receive_count = 0
-                #     self._last_data_receive_debug_time = time.monotonic()
-                # # Reset no-data warning timer since we received data
-                # self._last_no_data_warning_time = time.monotonic()
-                
                 self._currentData = data# mavlink LOCAL_POSITION_NED      # Flight controller time
                 # Set gathered flags to indicate we have received data
                 self._currentData.gathered['quat_ned_bodyfrd'] = True
@@ -882,8 +833,8 @@ class System_Manager():
                 self._currentData.gathered['imu_ned'] = True
                                       
                 #if (self._currentData.custom_mode_id == 50593792) or \ # and self._currentData.groundspeed<0.5) or  \
+                #print(f"Current custom mode id: {self._currentData.custom_mode_id}")
                 if self._currentData.custom_mode_id != PX4_FLIGHT_STATE.OFFBOARD.value:  # HOLD ON state or POSITION state
-                    
                     self._input_logger = None
                     self.yawDefinedDir_ned = np.array([np.cos(self._currentData.heading), np.sin(self._currentData.heading), 0])
                     self.holdonHeading = self.yawDefinedDir_ned
