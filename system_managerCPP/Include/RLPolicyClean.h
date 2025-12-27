@@ -1,5 +1,6 @@
 #ifndef RL_POLICY_CLEAN_H
 #define RL_POLICY_CLEAN_H
+#include "general.h"
 
 #include <Eigen/Dense>
 #include <string>
@@ -13,8 +14,8 @@
 class RLPolicyClean {
 private:
     // Observation normalization parameters
-    Eigen::VectorXd obs_mean;
-    Eigen::VectorXd obs_var;
+    VectorXd obs_mean;
+    VectorXd obs_var;
     
     // Neural network components (LibTorch modules)
     // Sequential cannot be stored in AnyModule (forward() is templated)
@@ -41,8 +42,8 @@ private:
     static std::vector<int> _find_mlp_linear_indices(const std::string& checkpoint_path);
     
     void _init_modules(
-        const Eigen::VectorXd& obs_mean,
-        const Eigen::VectorXd& obs_var,
+        const VectorXd& obs_mean,
+        const VectorXd& obs_var,
         std::shared_ptr<torch::nn::Sequential> encoder,
         std::shared_ptr<torch::nn::GRU> core,
         std::shared_ptr<torch::nn::Linear> dist_linear,
@@ -54,15 +55,15 @@ public:
     
     // Forward pass: returns (action_logits, new_hxs)
     // action_logits contains [mean, logstd] concatenated
-    std::pair<Eigen::VectorXd, Eigen::VectorXd> forward(
-        const Eigen::VectorXd& obs,
+    std::pair<VectorXd, VectorXd> forward(
+        const VectorXd& obs,
         bool normalized = false);
     
     // Reset hidden state
     void reset_hidden_state(int batch_size = 1);
     
     // Set hidden state
-    void set_hidden_state(const Eigen::VectorXd& hxs_vec);
+    void set_hidden_state(const VectorXd& hxs_vec);
     
     // Load policy from checkpoint
     static std::shared_ptr<RLPolicyClean> load_from_checkpoint(

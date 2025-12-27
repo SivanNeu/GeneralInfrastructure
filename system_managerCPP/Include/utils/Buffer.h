@@ -1,5 +1,6 @@
 #ifndef BUFFER_H
 #define BUFFER_H
+#include "general.h"
 
 #include <vector>
 #include <cstdint>

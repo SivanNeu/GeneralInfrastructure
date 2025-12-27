@@ -1,5 +1,6 @@
 #ifndef PX4_FLIGHT_STATE_H
 #define PX4_FLIGHT_STATE_H
+#include "general.h"
 
 enum class PX4_FLIGHT_STATE {
     OFFBOARD = 393216,

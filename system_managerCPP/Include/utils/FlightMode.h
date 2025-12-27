@@ -1,5 +1,6 @@
 #ifndef FLIGHT_MODE_H
 #define FLIGHT_MODE_H
+#include "general.h"
 
 enum class FLIGHT_MODE {
     UNKNOWN = 0,

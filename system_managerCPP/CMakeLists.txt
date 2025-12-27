@@ -233,7 +233,21 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
 endif()
 
 # Example executable (optional - uncomment if you want to build an executable)
-# add_executable(SystemManagerMain main.cpp)
+# Create executable
+add_executable(SystemManagerMain Src/main.cpp)
+
+# Link the executable with the library
+target_link_libraries(SystemManagerMain
+    PRIVATE
+    SystemManagerLib
+)
+
+# Include directories for the executable
+target_include_directories(SystemManagerMain
+    PRIVATE
+    ${INCLUDE_DIR}
+    ${INCLUDE_UTILS_DIR}
+)
 # target_link_libraries(SystemManagerMain SystemManagerLib)
 
 # Installation (optional)

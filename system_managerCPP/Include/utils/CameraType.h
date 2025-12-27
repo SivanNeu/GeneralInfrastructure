@@ -1,5 +1,6 @@
 #ifndef CAMERA_TYPE_H
 #define CAMERA_TYPE_H
+#include "general.h"
 
 #include <string>
 

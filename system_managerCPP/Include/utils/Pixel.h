@@ -1,5 +1,6 @@
 #ifndef PIXEL_H
 #define PIXEL_H
+#include "general.h"
 
 #include <Eigen/Dense>
 

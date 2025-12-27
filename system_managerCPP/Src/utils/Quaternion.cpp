@@ -1,4 +1,5 @@
 #include "utils/Quaternion.h"
+#include "general.h"
 #include "utils/Euler.h"
 #include <cmath>
 #include <sstream>
@@ -44,30 +45,30 @@ double Quaternion::dot(const Quaternion& quat) const {
     return x*quat.x + y*quat.y + z*quat.z + w*quat.w;
 }
 
-Eigen::Vector3d Quaternion::rotate_vec(const Eigen::Vector3d& vec) const {
+Vector3d Quaternion::rotate_vec(const Vector3d& vec) const {
     if (vec.norm() == 0) {
-        return Eigen::Vector3d::Zero();
+        return Vector3d::Zero();
     }
     Quaternion v_quat(vec[0], vec[1], vec[2], 0);
     Quaternion res = (*this) * v_quat * conjugate();
-    return Eigen::Vector3d(res.x, res.y, res.z);
+    return Vector3d(res.x, res.y, res.z);
 }
 
-Eigen::Vector3d Quaternion::passive_rotate_vector(double x, double y, double z) const {
+Vector3d Quaternion::passive_rotate_vector(double x, double y, double z) const {
     Quaternion v_quat(x, y, z, 0);
     Quaternion q_conjugate = conjugate();
     Quaternion rotated_v = (*this) * v_quat * q_conjugate;
-    return Eigen::Vector3d(rotated_v.x, rotated_v.y, rotated_v.z);
+    return Vector3d(rotated_v.x, rotated_v.y, rotated_v.z);
 }
 
-Eigen::Vector3d Quaternion::active_rotate_vector(double x, double y, double z) const {
+Vector3d Quaternion::active_rotate_vector(double x, double y, double z) const {
     Quaternion v_quat(x, y, z, 0);
     Quaternion q_conjugate = conjugate();
     Quaternion rotated_v = q_conjugate * v_quat * (*this);
-    return Eigen::Vector3d(rotated_v.x, rotated_v.y, rotated_v.z);
+    return Vector3d(rotated_v.x, rotated_v.y, rotated_v.z);
 }
 
-Eigen::Matrix3d Quaternion::to_rotation_matrix() const {
+Matrix3d Quaternion::to_rotation_matrix() const {
     double q0 = w;
     double q1 = x;
     double q2 = y;
@@ -85,7 +86,7 @@ Eigen::Matrix3d Quaternion::to_rotation_matrix() const {
     double r21 = 2 * (q2 * q3 + q0 * q1);
     double r22 = 2 * (q0 * q0 + q3 * q3) - 1;
     
-    Eigen::Matrix3d rot_matrix;
+    Matrix3d rot_matrix;
     rot_matrix << r00, r01, r02,
                   r10, r11, r12,
                   r20, r21, r22;
@@ -106,10 +107,10 @@ Euler Quaternion::to_euler() const {
     double t4 = +1.0 - 2.0 * (y * y + z * z);
     double yaw_z = std::atan2(t3, t4);
     
-    return Euler(Eigen::Vector3d(roll_x, pitch_y, yaw_z));
+    return Euler(Vector3d(roll_x, pitch_y, yaw_z));
 }
 
-Quaternion Quaternion::from_matrix(const Eigen::Matrix3d& mat) {
+Quaternion Quaternion::from_matrix(const Matrix3d& mat) {
     double trace = mat(0,0) + mat(1,1) + mat(2,2);
     
     if (trace > 0) {
@@ -145,12 +146,12 @@ Quaternion Quaternion::from_matrix(const Eigen::Matrix3d& mat) {
     }
 }
 
-Quaternion Quaternion::from_axis_angle(const Eigen::Vector3d& axis, double angle) {
+Quaternion Quaternion::from_axis_angle(const Vector3d& axis, double angle) {
     if (axis.norm() == 0) {
         return Quaternion(0, 0, 0, 1);
     }
     
-    Eigen::Vector3d axis_norm = axis / axis.norm();
+    Vector3d axis_norm = axis / axis.norm();
     double w = std::cos(angle/2);
     double x = axis_norm[0] * std::sin(angle/2);
     double y = axis_norm[1] * std::sin(angle/2);
@@ -245,7 +246,7 @@ Euler Quaternion::quat_to_euler(const Quaternion& q) {
     double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
     double yaw_z = std::atan2(siny_cosp, cosy_cosp);
     
-    return Euler(Eigen::Vector3d(roll_x, pitch_y, yaw_z));
+    return Euler(Vector3d(roll_x, pitch_y, yaw_z));
 }
 
 std::string Quaternion::to_string() const {

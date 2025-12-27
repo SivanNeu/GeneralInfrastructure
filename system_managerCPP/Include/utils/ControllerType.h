@@ -1,5 +1,6 @@
 #ifndef CONTROLLER_TYPE_H
 #define CONTROLLER_TYPE_H
+#include "general.h"
 
 enum class CONTROLLER_TYPE {
     VELOCITYPID = 0,

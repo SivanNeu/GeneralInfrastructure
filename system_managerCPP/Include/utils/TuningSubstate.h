@@ -1,5 +1,6 @@
 #ifndef TUNING_SUBSTATE_H
 #define TUNING_SUBSTATE_H
+#include "general.h"
 
 #include <string>
 

@@ -1,5 +1,6 @@
 #ifndef TUNING_STATE_H
 #define TUNING_STATE_H
+#include "general.h"
 
 #include <string>
 

@@ -1,5 +1,6 @@
 #ifndef FEATURE_H
 #define FEATURE_H
+#include "general.h"
 
 #include "utils/NED.h"
 #include <string>

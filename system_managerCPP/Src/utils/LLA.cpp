@@ -1,8 +1,9 @@
 #include "utils/LLA.h"
+#include "general.h"
 #include <sstream>
 
-LLA::LLA(int64_t timestamp, const Eigen::Vector3d& lla, 
-         Eigen::Vector3d* lla_vel, double* relative_alt)
+LLA::LLA(int64_t timestamp, const Vector3d& lla, 
+         Vector3d* lla_vel, double* relative_alt)
     : timestamp(timestamp), lla(lla), lla_vel(lla_vel), relative_alt(relative_alt) {
 }
 

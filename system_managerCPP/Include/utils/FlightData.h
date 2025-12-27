@@ -1,5 +1,6 @@
 #ifndef FLIGHT_DATA_H
 #define FLIGHT_DATA_H
+#include "general.h"
 
 #include "utils/Quaternion.h"
 #include "utils/Altitude.h"
@@ -34,9 +35,9 @@ public:
     NED pos_ned_m;
     LLA raw_pos_lla_deg;
     LLA filt_pos_lla_deg;
-    Eigen::Vector3d rpy_rates;
+    Vector3d rpy_rates;
     double current_thrust;
-    Eigen::Vector3d rpy;
+    Vector3d rpy;
     int custom_mode_id;
     std::string custom_mode_name;
     double throttle;

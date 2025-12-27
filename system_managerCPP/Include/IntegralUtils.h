@@ -1,15 +1,14 @@
 #ifndef INTEGRAL_UTILS_H
 #define INTEGRAL_UTILS_H
-
-#include <Eigen/Dense>
+#include "general.h"
 
 class IntegralErrorVec3 {
 public:
-    Eigen::Vector3d error;
-    Eigen::Vector3d integrand;
+    Vector3d error;
+    Vector3d integrand;
 
     IntegralErrorVec3();
-    void integrate(const Eigen::Vector3d& current_integrand, double dt);
+    void integrate(const Vector3d& current_integrand, double dt);
     void set_zero();
 };
 

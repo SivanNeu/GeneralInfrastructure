@@ -1,5 +1,6 @@
 #ifndef ALTITUDE_H
 #define ALTITUDE_H
+#include "general.h"
 
 #include <cstdint>
 

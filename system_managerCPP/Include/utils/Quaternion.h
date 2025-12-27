@@ -1,5 +1,6 @@
 #ifndef QUATERNION_H
 #define QUATERNION_H
+#include "general.h"
 
 #include <Eigen/Dense>
 #include <cstdint>
@@ -23,14 +24,14 @@ public:
     Quaternion inv() const;
     double dot(const Quaternion& quat) const;
     
-    Eigen::Vector3d rotate_vec(const Eigen::Vector3d& vec) const;
-    Eigen::Vector3d passive_rotate_vector(double x, double y, double z) const;
-    Eigen::Vector3d active_rotate_vector(double x, double y, double z) const;
-    Eigen::Matrix3d to_rotation_matrix() const;
+    Vector3d rotate_vec(const Vector3d& vec) const;
+    Vector3d passive_rotate_vector(double x, double y, double z) const;
+    Vector3d active_rotate_vector(double x, double y, double z) const;
+    Matrix3d to_rotation_matrix() const;
     Euler to_euler() const;
     
-    static Quaternion from_matrix(const Eigen::Matrix3d& mat);
-    static Quaternion from_axis_angle(const Eigen::Vector3d& axis, double angle);
+    static Quaternion from_matrix(const Matrix3d& mat);
+    static Quaternion from_axis_angle(const Vector3d& axis, double angle);
     static Quaternion from_euler(double roll, double pitch, double yaw);
     static Quaternion euler_to_quat(const Euler& euler);
     static Quaternion euler_to_quat(double roll, double pitch, double yaw);

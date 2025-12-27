@@ -1,4 +1,5 @@
 #include "VelocityRLController.h"
+#include "general.h"
 #include "utils/FlightData.h"
 #include <algorithm>
 #include <cmath>
@@ -9,9 +10,9 @@ VelocityRLControllerParameters::VelocityRLControllerParameters(double mass) : ma
 VelocityRLController::VelocityRLController(double mass, double maximalVelocity, double currentTime)
     : controllerName("VelocityRL"), controllerType(CONTROLLER_TYPE::VELOCITYRL),
       lastTime(currentTime), current_time(currentTime),
-      pos_self(Eigen::Vector3d::Zero()), vel_self(Eigen::Vector3d::Zero()),
-      pos_target(Eigen::Vector3d::Zero()), heading_target(Eigen::Vector3d::Zero()),
-      vel_target(Eigen::Vector3d::Zero()),
+      pos_self(Vector3d::Zero()), vel_self(Vector3d::Zero()),
+      pos_target(Vector3d::Zero()), heading_target(Vector3d::Zero()),
+      vel_target(Vector3d::Zero()),
       max_vel(maximalVelocity), max_range(15.0), int_scale(max_range * 20.0),
       max_omega(M_PI / 2.0), ringLen(1), ringV(Eigen::MatrixXd::Zero(2, ringLen)),
       ringIndex(0), ringAverage(Eigen::Vector2d::Zero()), param(mass),
@@ -32,10 +33,10 @@ VelocityRLController::VelocityRLController(double mass, double maximalVelocity, 
     }
 }
 
-std::tuple<Eigen::Vector3d, Eigen::Matrix3d, Eigen::Vector3d, Eigen::VectorXd> VelocityRLController::getCommand(
-    const std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Quaternion>& currentBodyState,
-    const std::tuple<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>,
-                    std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>& desiredBodyState,
+std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> VelocityRLController::getCommand(
+    const std::tuple<Vector3d, Vector3d, Vector3d, Vector3d, Quaternion>& currentBodyState,
+    const std::tuple<std::tuple<Vector3d, Vector3d, Vector3d, Vector3d, Vector3d>,
+                    std::tuple<Vector3d, Vector3d, Vector3d>>& desiredBodyState,
     const std::vector<bool>& controlType,
     Flight_Data* currentData) {
     
@@ -51,11 +52,11 @@ std::tuple<Eigen::Vector3d, Eigen::Matrix3d, Eigen::Vector3d, Eigen::VectorXd> V
     heading_target = heading_target_state;
     heading_target.normalize();
     
-    Eigen::Vector3d gyro_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(gyro_ned);
+    Vector3d gyro_bodyfrd = quat_ned_bodyfrd.inv().rotate_vec(gyro_ned);
     
     // Heading Observation
-    Eigen::Vector3d curHeading = quat_ned_bodyfrd.rotate_vec(Eigen::Vector3d(1, 0, 0));
-    Eigen::Vector3d cross = curHeading.cross(heading_target);
+    Vector3d curHeading = quat_ned_bodyfrd.rotate_vec(Vector3d(1, 0, 0));
+    Vector3d cross = curHeading.cross(heading_target);
     double cross_z = cross[2];
     double dot = curHeading.dot(heading_target);
     double theta = std::atan2(cross_z, dot);
@@ -95,13 +96,13 @@ std::tuple<Eigen::Vector3d, Eigen::Matrix3d, Eigen::Vector3d, Eigen::VectorXd> V
     double vr = std::max(-max_vel, std::min(max_vel, vr_));
     double w_clipped = std::max(-max_omega, std::min(max_omega, w));
     
-    Eigen::Vector3d vel_vector(vf, vr, 0);  // in FRD
-    Eigen::Vector3d omega_vector(0, 0, w_clipped);
+    Vector3d vel_vector(vf, vr, 0);  // in FRD
+    Vector3d omega_vector(0, 0, w_clipped);
     
     Eigen::VectorXd obsTotal(6);
     obsTotal << obsXY, obsHeading;
     
-    return std::make_tuple(vel_vector, Eigen::Matrix3d::Identity(), omega_vector, obsTotal);
+    return std::make_tuple(vel_vector, Matrix3d::Identity(), omega_vector, obsTotal);
 }
 
 void VelocityRLController::resetIntegralErrorTerms() {

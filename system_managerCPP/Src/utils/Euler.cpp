@@ -1,12 +1,13 @@
 #include "utils/Euler.h"
+#include "general.h"
 #include "utils/Quaternion.h"
 #include <sstream>
 #include <cmath>
 
-Euler::Euler(const Eigen::Vector3d& rpy) : rpy(rpy) {
+Euler::Euler(const Vector3d& rpy) : rpy(rpy) {
 }
 
-void Euler::set(const Eigen::Vector3d& rpy) {
+void Euler::set(const Vector3d& rpy) {
     this->rpy = rpy;
 }
 

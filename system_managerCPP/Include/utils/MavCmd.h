@@ -1,5 +1,6 @@
 #ifndef MAV_CMD_H
 #define MAV_CMD_H
+#include "general.h"
 
 enum class MAV_CMD {
     ARM = 0,

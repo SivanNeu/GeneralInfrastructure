@@ -1,5 +1,6 @@
 #ifndef LOW_PASS_FILTER_H
 #define LOW_PASS_FILTER_H
+#include "general.h"
 
 #include "utils/LpfType.h"
 #include <optional>

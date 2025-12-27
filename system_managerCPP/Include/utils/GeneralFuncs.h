@@ -1,5 +1,6 @@
 #ifndef GENERAL_FUNCS_H
 #define GENERAL_FUNCS_H
+#include "general.h"
 
 #include <Eigen/Dense>
 #include <cmath>
@@ -10,21 +11,21 @@
 #include "YawCommand.h"
 
 // Rotation matrices
-Eigen::Matrix3d rotX(double angle);
-Eigen::Matrix3d rotY(double angle);
-Eigen::Matrix3d rotZ(double angle);
+Matrix3d rotX(double angle);
+Matrix3d rotY(double angle);
+Matrix3d rotZ(double angle);
 
 // Rate conversions
-Eigen::Vector3d rpyRate2omega_frd(const Eigen::Vector3d& rpyVec, const Eigen::Vector3d& rpydot);
-Eigen::Vector3d omega_frd2rpyRate(const Eigen::Vector3d& rpyVec, const Eigen::Vector3d& omega_frd);
+Vector3d rpyRate2omega_frd(const Vector3d& rpyVec, const Vector3d& rpydot);
+Vector3d omega_frd2rpyRate(const Vector3d& rpyVec, const Vector3d& omega_frd);
 
 // Thrust limiting
-Eigen::Vector3d limitInclination(double maxAngle, const Eigen::Vector3d& thrustVector);
+Vector3d limitInclination(double maxAngle, const Vector3d& thrustVector);
 
 // Lissajous curve
 struct LissajousResult {
-    Eigen::Vector3d x, x_dot, x_2dot, x_3dot, x_4dot;
-    Eigen::Vector3d b1, b1_dot, b1_2dot;
+    Vector3d x, x_dot, x_2dot, x_3dot, x_4dot;
+    Vector3d b1, b1_dot, b1_2dot;
 };
 
 LissajousResult lissajous_func(double t, double A = 1.0, double B = 1.0, double C = 0.2, 
@@ -33,12 +34,12 @@ LissajousResult lissajous_func(double t, double A = 1.0, double B = 1.0, double 
 
 // Ray-plane intersection (returns nullptr if no intersection)
 // Note: Caller is responsible for deleting the returned pointer
-Eigen::Vector3d* ray_plane_intersection(const Eigen::Vector3d& ray_origin, 
-                                        const Eigen::Vector3d& ray_direction, 
+Vector3d* ray_plane_intersection(const Vector3d& ray_origin, 
+                                        const Vector3d& ray_direction, 
                                         const Eigen::Vector4d& plane_coeffs);
 
 // Vector utilities
-Eigen::Vector3d unitVec(const Eigen::Vector3d& vec);
+Vector3d unitVec(const Vector3d& vec);
 
 // Math utilities from MathUtils
 // MaxNorm functions for error estimation
@@ -89,8 +90,8 @@ IntegrateResult Integrate(std::function<Eigen::VectorXd(double, const Eigen::Vec
 
 // Trajectory generation functions (from trajectories.py)
 struct TrajectoryResult {
-    std::vector<Eigen::Vector3d> x;  // [x, x_dot, x_2dot, x_3dot, x_4dot]
-    std::vector<Eigen::Vector3d> b1; // [b1, b1_dot, b1_2dot]
+    std::vector<Vector3d> x;  // [x, x_dot, x_2dot, x_3dot, x_4dot]
+    std::vector<Vector3d> b1; // [b1, b1_dot, b1_2dot]
     std::vector<bool> pos_control;
     std::vector<bool> vel_control;
     YAW_COMMAND yaw_control;
@@ -98,28 +99,28 @@ struct TrajectoryResult {
 };
 
 // Horizontal circle trajectory
-TrajectoryResult horz_circle(const Eigen::Vector3d& center = Eigen::Vector3d::Zero(),
+TrajectoryResult horz_circle(const Vector3d& center = Vector3d::Zero(),
                              double radius = 3.0,
-                             const Eigen::Vector3d& missionAttitudeDirection = Eigen::Vector3d(-1, 0, 0),
+                             const Vector3d& missionAttitudeDirection = Vector3d(-1, 0, 0),
                              double Vel = 1.0,
                              double start_time = -1.0);
 
 // Point position trajectory
-TrajectoryResult pos_point(const std::vector<Eigen::Vector3d>& missionPoint,
-                          const Eigen::Vector3d& missionAttitudeDirection = Eigen::Vector3d(-1, 0, 0),
+TrajectoryResult pos_point(const std::vector<Vector3d>& missionPoint,
+                          const Vector3d& missionAttitudeDirection = Vector3d(-1, 0, 0),
                           double start_time = -1.0);
 
 // Velocity point trajectory
-TrajectoryResult vel_point(const Eigen::Vector3d& missionVelocity = Eigen::Vector3d(1, 0, 0),
-                          const Eigen::Vector3d& missionAttitudeDirection = Eigen::Vector3d(-1, 0, 0),
+TrajectoryResult vel_point(const Vector3d& missionVelocity = Vector3d(1, 0, 0),
+                          const Vector3d& missionAttitudeDirection = Vector3d(-1, 0, 0),
                           double start_time = -1.0);
 
 // Constant velocity line trajectory
-TrajectoryResult lineConstVel(const Eigen::Vector3d& startPoint,
-                             const Eigen::Vector3d& endPoint,
+TrajectoryResult lineConstVel(const Vector3d& startPoint,
+                             const Vector3d& endPoint,
                              double speed,
                              double startTime,
-                             const Eigen::Vector3d& missionAttitudeDirection = Eigen::Vector3d(-1, 0, 0));
+                             const Vector3d& missionAttitudeDirection = Vector3d(-1, 0, 0));
 
 // Vertical circle trajectory
 TrajectoryResult vert_circle(double start_time = -1.0);

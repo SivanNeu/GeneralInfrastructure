@@ -1,34 +1,35 @@
 #include "utils/GeneralFuncs.h"
+#include "general.h"
 #include "utils/TimeUtils.h"
 #include <cmath>
 #include <algorithm>
 
-Eigen::Matrix3d rotX(double angle) {
-    Eigen::Matrix3d R;
+Matrix3d rotX(double angle) {
+    Matrix3d R;
     R << 1, 0, 0,
          0, std::cos(angle), -std::sin(angle),
          0, std::sin(angle), std::cos(angle);
     return R;
 }
 
-Eigen::Matrix3d rotY(double angle) {
-    Eigen::Matrix3d R;
+Matrix3d rotY(double angle) {
+    Matrix3d R;
     R << std::cos(angle), 0, std::sin(angle),
          0, 1, 0,
          -std::sin(angle), 0, std::cos(angle);
     return R;
 }
 
-Eigen::Matrix3d rotZ(double angle) {
-    Eigen::Matrix3d R;
+Matrix3d rotZ(double angle) {
+    Matrix3d R;
     R << std::cos(angle), -std::sin(angle), 0,
          std::sin(angle), std::cos(angle), 0,
          0, 0, 1;
     return R;
 }
 
-Eigen::Vector3d rpyRate2omega_frd(const Eigen::Vector3d& rpyVec, const Eigen::Vector3d& rpydot) {
-    Eigen::Matrix3d convMat_ned_omega_rpy;
+Vector3d rpyRate2omega_frd(const Vector3d& rpyVec, const Vector3d& rpydot) {
+    Matrix3d convMat_ned_omega_rpy;
     convMat_ned_omega_rpy << 1, 0, -std::sin(rpyVec[1]),
                              0, std::cos(rpyVec[0]), std::cos(rpyVec[1]) * std::sin(rpyVec[0]),
                              0, -std::sin(rpyVec[0]), std::cos(rpyVec[1]) * std::cos(rpyVec[0]);
@@ -36,8 +37,8 @@ Eigen::Vector3d rpyRate2omega_frd(const Eigen::Vector3d& rpyVec, const Eigen::Ve
     return convMat_ned_omega_rpy * rpydot;
 }
 
-Eigen::Vector3d omega_frd2rpyRate(const Eigen::Vector3d& rpyVec, const Eigen::Vector3d& omega_frd) {
-    Eigen::Matrix3d convMat_ned_rpy_omega;
+Vector3d omega_frd2rpyRate(const Vector3d& rpyVec, const Vector3d& omega_frd) {
+    Matrix3d convMat_ned_rpy_omega;
     double tan_pitch = std::tan(rpyVec[1]);
     double cos_pitch = std::cos(rpyVec[1]);
     double sin_roll = std::sin(rpyVec[0]);
@@ -50,8 +51,8 @@ Eigen::Vector3d omega_frd2rpyRate(const Eigen::Vector3d& rpyVec, const Eigen::Ve
     return convMat_ned_rpy_omega * omega_frd;
 }
 
-Eigen::Vector3d limitInclination(double maxAngle, const Eigen::Vector3d& thrustVector) {
-    Eigen::Vector3d thrustDir = thrustVector / thrustVector.norm();
+Vector3d limitInclination(double maxAngle, const Vector3d& thrustVector) {
+    Vector3d thrustDir = thrustVector / thrustVector.norm();
     double angle = std::acos(thrustDir[2]);
     
     if (angle > maxAngle) {
@@ -69,43 +70,43 @@ LissajousResult lissajous_func(double t, double A, double B, double C,
     double d = M_PI / 2.0 * 0.0;
     
     LissajousResult result;
-    result.x = Eigen::Vector3d(
+    result.x = Vector3d(
         A * std::sin(a * t + d),
         B * std::sin(b * t),
         alt + C * std::cos(c * t)
     );
-    result.x_dot = Eigen::Vector3d(
+    result.x_dot = Vector3d(
         A * a * std::cos(a * t + d),
         B * b * std::cos(b * t),
         C * c * -std::sin(c * t)
     );
-    result.x_2dot = Eigen::Vector3d(
+    result.x_2dot = Vector3d(
         A * a * a * -std::sin(a * t + d),
         B * b * b * -std::sin(b * t),
         C * c * c * -std::cos(c * t)
     );
-    result.x_3dot = Eigen::Vector3d(
+    result.x_3dot = Vector3d(
         A * a * a * a * -std::cos(a * t + d),
         B * b * b * b * -std::cos(b * t),
         C * c * c * c * std::sin(c * t)
     );
-    result.x_4dot = Eigen::Vector3d(
+    result.x_4dot = Vector3d(
         A * a * a * a * a * std::sin(a * t + d),
         B * b * b * b * b * std::sin(b * t),
         C * c * c * c * c * std::cos(c * t)
     );
     
-    result.b1 = Eigen::Vector3d(std::cos(w * t), std::sin(w * t), 0);
-    result.b1_dot = w * Eigen::Vector3d(-std::sin(w * t), std::cos(w * t), 0);
-    result.b1_2dot = w * w * Eigen::Vector3d(-std::cos(w * t), -std::sin(w * t), 0);
+    result.b1 = Vector3d(std::cos(w * t), std::sin(w * t), 0);
+    result.b1_dot = w * Vector3d(-std::sin(w * t), std::cos(w * t), 0);
+    result.b1_2dot = w * w * Vector3d(-std::cos(w * t), -std::sin(w * t), 0);
     
     return result;
 }
 
-Eigen::Vector3d* ray_plane_intersection(const Eigen::Vector3d& ray_origin, 
-                                         const Eigen::Vector3d& ray_direction, 
+Vector3d* ray_plane_intersection(const Vector3d& ray_origin, 
+                                         const Vector3d& ray_direction, 
                                          const Eigen::Vector4d& plane_coeffs) {
-    Eigen::Vector3d plane_normal = plane_coeffs.head<3>();
+    Vector3d plane_normal = plane_coeffs.head<3>();
     double denominator = plane_normal.dot(ray_direction);
     
     if (std::abs(denominator) < 1e-6) {
@@ -116,11 +117,11 @@ Eigen::Vector3d* ray_plane_intersection(const Eigen::Vector3d& ray_origin,
     }
     
     double t = -(ray_origin.dot(plane_normal) + plane_coeffs[3]) / denominator;
-    Eigen::Vector3d* intersection = new Eigen::Vector3d(ray_origin + t * ray_direction);
+    Vector3d* intersection = new Vector3d(ray_origin + t * ray_direction);
     return intersection;
 }
 
-Eigen::Vector3d unitVec(const Eigen::Vector3d& vec) {
+Vector3d unitVec(const Vector3d& vec) {
     double norm = vec.norm();
     if (norm == 0) {
         return vec;
@@ -433,8 +434,8 @@ IntegrateResult Integrate(std::function<Eigen::VectorXd(double, const Eigen::Vec
 
 // Trajectory generation functions (from trajectories.py)
 
-TrajectoryResult horz_circle(const Eigen::Vector3d& center, double radius,
-                             const Eigen::Vector3d& missionAttitudeDirection,
+TrajectoryResult horz_circle(const Vector3d& center, double radius,
+                             const Vector3d& missionAttitudeDirection,
                              double Vel, double start_time) {
     double t;
     if (start_time < 0) {
@@ -458,36 +459,36 @@ TrajectoryResult horz_circle(const Eigen::Vector3d& center, double radius,
     
     TrajectoryResult result;
     result.x.resize(5);
-    result.x[0] = Eigen::Vector3d(
+    result.x[0] = Vector3d(
         A * std::sin(a * t + d),
         B * std::cos(b * t),
         C * std::cos(c * t)
     ) + center;
-    result.x[1] = Eigen::Vector3d(
+    result.x[1] = Vector3d(
         A * a * std::cos(a * t + d),
         B * b * -std::sin(b * t),
         C * c * -std::sin(c * t)
     );
-    result.x[2] = Eigen::Vector3d(
+    result.x[2] = Vector3d(
         A * a * a * -std::sin(a * t + d),
         B * b * b * -std::cos(b * t),
         C * c * c * -std::cos(c * t)
     );
-    result.x[3] = Eigen::Vector3d(
+    result.x[3] = Vector3d(
         A * a * a * a * -std::cos(a * t + d),
         B * b * b * b * std::sin(b * t),
         C * c * c * c * std::sin(c * t)
     );
-    result.x[4] = Eigen::Vector3d(
+    result.x[4] = Vector3d(
         A * a * a * a * a * std::sin(a * t + d),
         B * b * b * b * b * std::cos(b * t),
         C * c * c * c * c * std::cos(c * t)
     );
     
     result.b1.resize(3);
-    result.b1[0] = Eigen::Vector3d(std::cos(w * t), std::sin(w * t), 0);
-    result.b1[1] = Eigen::Vector3d::Zero();
-    result.b1[2] = Eigen::Vector3d::Zero();
+    result.b1[0] = Vector3d(std::cos(w * t), std::sin(w * t), 0);
+    result.b1[1] = Vector3d::Zero();
+    result.b1[2] = Vector3d::Zero();
     
     result.pos_control = {false, false, true};
     result.vel_control = {true, true, false};
@@ -496,8 +497,8 @@ TrajectoryResult horz_circle(const Eigen::Vector3d& center, double radius,
     return result;
 }
 
-TrajectoryResult pos_point(const std::vector<Eigen::Vector3d>& missionPoint,
-                          const Eigen::Vector3d& missionAttitudeDirection,
+TrajectoryResult pos_point(const std::vector<Vector3d>& missionPoint,
+                          const Vector3d& missionAttitudeDirection,
                           double start_time) {
     double t;
     if (start_time < 0) {
@@ -506,7 +507,7 @@ TrajectoryResult pos_point(const std::vector<Eigen::Vector3d>& missionPoint,
         t = TimeUtils::now() - start_time;
     }
     
-    Eigen::Vector3d x = missionPoint[0];
+    Vector3d x = missionPoint[0];
     if (missionPoint.size() > 1) {
         double T = 10.0;
         double w = 2.0 * M_PI / T;
@@ -517,15 +518,15 @@ TrajectoryResult pos_point(const std::vector<Eigen::Vector3d>& missionPoint,
     TrajectoryResult result;
     result.x.resize(5);
     result.x[0] = x;
-    result.x[1] = Eigen::Vector3d::Zero();
-    result.x[2] = Eigen::Vector3d::Zero();
-    result.x[3] = Eigen::Vector3d::Zero();
-    result.x[4] = Eigen::Vector3d::Zero();
+    result.x[1] = Vector3d::Zero();
+    result.x[2] = Vector3d::Zero();
+    result.x[3] = Vector3d::Zero();
+    result.x[4] = Vector3d::Zero();
     
     result.b1.resize(3);
     result.b1[0] = missionAttitudeDirection;
-    result.b1[1] = Eigen::Vector3d::Zero();
-    result.b1[2] = Eigen::Vector3d::Zero();
+    result.b1[1] = Vector3d::Zero();
+    result.b1[2] = Vector3d::Zero();
     
     result.pos_control = {true, true, true};
     result.vel_control = {false, false, false};
@@ -534,8 +535,8 @@ TrajectoryResult pos_point(const std::vector<Eigen::Vector3d>& missionPoint,
     return result;
 }
 
-TrajectoryResult vel_point(const Eigen::Vector3d& missionVelocity,
-                          const Eigen::Vector3d& missionAttitudeDirection,
+TrajectoryResult vel_point(const Vector3d& missionVelocity,
+                          const Vector3d& missionAttitudeDirection,
                           double start_time) {
     double t;
     if (start_time < 0) {
@@ -546,16 +547,16 @@ TrajectoryResult vel_point(const Eigen::Vector3d& missionVelocity,
     
     TrajectoryResult result;
     result.x.resize(5);
-    result.x[0] = Eigen::Vector3d::Zero();
+    result.x[0] = Vector3d::Zero();
     result.x[1] = missionVelocity;
-    result.x[2] = Eigen::Vector3d::Zero();
-    result.x[3] = Eigen::Vector3d::Zero();
-    result.x[4] = Eigen::Vector3d::Zero();
+    result.x[2] = Vector3d::Zero();
+    result.x[3] = Vector3d::Zero();
+    result.x[4] = Vector3d::Zero();
     
     result.b1.resize(3);
     result.b1[0] = missionAttitudeDirection;
-    result.b1[1] = Eigen::Vector3d::Zero();
-    result.b1[2] = Eigen::Vector3d::Zero();
+    result.b1[1] = Vector3d::Zero();
+    result.b1[2] = Vector3d::Zero();
     
     result.pos_control = {false, false, false};
     result.vel_control = {true, true, true};
@@ -564,25 +565,25 @@ TrajectoryResult vel_point(const Eigen::Vector3d& missionVelocity,
     return result;
 }
 
-TrajectoryResult lineConstVel(const Eigen::Vector3d& startPoint,
-                             const Eigen::Vector3d& endPoint,
+TrajectoryResult lineConstVel(const Vector3d& startPoint,
+                             const Vector3d& endPoint,
                              double speed,
                              double startTime,
-                             const Eigen::Vector3d& missionAttitudeDirection) {
+                             const Vector3d& missionAttitudeDirection) {
     double t = TimeUtils::now() - startTime;
     
-    Eigen::Vector3d deltaDistance = endPoint - startPoint;
-    Eigen::Vector3d deltaDir = unitVec(deltaDistance);
+    Vector3d deltaDistance = endPoint - startPoint;
+    Vector3d deltaDir = unitVec(deltaDistance);
     double deltaDistanceNorm = deltaDistance.norm();
-    Eigen::Vector3d velocity = deltaDir * speed;
+    Vector3d velocity = deltaDir * speed;
     
-    Eigen::Vector3d x = startPoint + t * velocity;
-    Eigen::Vector3d x_dot = velocity;
+    Vector3d x = startPoint + t * velocity;
+    Vector3d x_dot = velocity;
     bool finished = false;
     
     if (t * speed > deltaDistanceNorm) {
         x = endPoint;
-        x_dot = Eigen::Vector3d::Zero();
+        x_dot = Vector3d::Zero();
         finished = true;
     }
     
@@ -590,14 +591,14 @@ TrajectoryResult lineConstVel(const Eigen::Vector3d& startPoint,
     result.x.resize(5);
     result.x[0] = x;
     result.x[1] = x_dot;
-    result.x[2] = Eigen::Vector3d::Zero();
-    result.x[3] = Eigen::Vector3d::Zero();
-    result.x[4] = Eigen::Vector3d::Zero();
+    result.x[2] = Vector3d::Zero();
+    result.x[3] = Vector3d::Zero();
+    result.x[4] = Vector3d::Zero();
     
     result.b1.resize(3);
     result.b1[0] = missionAttitudeDirection;
-    result.b1[1] = Eigen::Vector3d::Zero();
-    result.b1[2] = Eigen::Vector3d::Zero();
+    result.b1[1] = Vector3d::Zero();
+    result.b1[2] = Vector3d::Zero();
     
     result.pos_control = {true, true, true};
     bool in_transit = (t * speed < deltaDistanceNorm);
@@ -633,37 +634,37 @@ TrajectoryResult vert_circle(double start_time) {
     
     TrajectoryResult result;
     result.x.resize(5);
-    result.x[0] = Eigen::Vector3d(
+    result.x[0] = Vector3d(
         C * std::cos(c * t),
         A * std::sin(a * t + d),
         B * std::cos(b * t)
     );
     result.x[0][2] = alt + C * std::cos(c * t);  // Overwrite z component
-    result.x[1] = Eigen::Vector3d(
+    result.x[1] = Vector3d(
         C * c * -std::sin(c * t),
         A * a * std::cos(a * t + d),
         B * b * -std::sin(b * t)
     );
-    result.x[2] = Eigen::Vector3d(
+    result.x[2] = Vector3d(
         C * c * c * -std::cos(c * t),
         A * a * a * -std::sin(a * t + d),
         B * b * b * -std::cos(b * t)
     );
-    result.x[3] = Eigen::Vector3d(
+    result.x[3] = Vector3d(
         C * c * c * c * std::sin(c * t),
         A * a * a * a * -std::cos(a * t + d),
         B * b * b * b * std::sin(b * t)
     );
-    result.x[4] = Eigen::Vector3d(
+    result.x[4] = Vector3d(
         C * c * c * c * c * std::cos(c * t),
         A * a * a * a * a * std::sin(a * t + d),
         B * b * b * b * b * std::cos(b * t)
     );
     
     result.b1.resize(3);
-    result.b1[0] = Eigen::Vector3d(1, 0, 0);
-    result.b1[1] = Eigen::Vector3d::Zero();
-    result.b1[2] = Eigen::Vector3d::Zero();
+    result.b1[0] = Vector3d(1, 0, 0);
+    result.b1[1] = Vector3d::Zero();
+    result.b1[2] = Vector3d::Zero();
     
     result.pos_control = {false, false, false};
     result.vel_control = {true, true, true};

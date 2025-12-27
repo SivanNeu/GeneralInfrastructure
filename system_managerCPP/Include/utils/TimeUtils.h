@@ -1,5 +1,6 @@
 #ifndef TIME_UTILS_H
 #define TIME_UTILS_H
+#include "general.h"
 
 #include <string>
 #include <chrono>

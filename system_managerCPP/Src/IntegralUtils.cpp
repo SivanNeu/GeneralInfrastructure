@@ -1,16 +1,17 @@
 #include "IntegralUtils.h"
+#include "general.h"
 
-IntegralErrorVec3::IntegralErrorVec3() : error(Eigen::Vector3d::Zero()), integrand(Eigen::Vector3d::Zero()) {
+IntegralErrorVec3::IntegralErrorVec3() : error(Vector3d::Zero()), integrand(Vector3d::Zero()) {
 }
 
-void IntegralErrorVec3::integrate(const Eigen::Vector3d& current_integrand, double dt) {
+void IntegralErrorVec3::integrate(const Vector3d& current_integrand, double dt) {
     error += (integrand + current_integrand) * dt / 2.0;
     integrand = current_integrand;
 }
 
 void IntegralErrorVec3::set_zero() {
-    error = Eigen::Vector3d::Zero();
-    integrand = Eigen::Vector3d::Zero();
+    error = Vector3d::Zero();
+    integrand = Vector3d::Zero();
 }
 
 IntegralError::IntegralError() : error(0.0), integrand(0.0) {

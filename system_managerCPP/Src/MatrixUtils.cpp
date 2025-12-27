@@ -1,25 +1,26 @@
 #include "MatrixUtils.h"
+#include "general.h"
 #include <cmath>
 
-Eigen::Matrix3d hat(const Eigen::Vector3d& x) {
-    Eigen::Matrix3d x_hat;
+Matrix3d hat(const Vector3d& x) {
+    Matrix3d x_hat;
     x_hat << 0.0, -x[2], x[1],
              x[2], 0.0, -x[0],
              -x[1], x[0], 0.0;
     return x_hat;
 }
 
-Eigen::Vector3d vee(const Eigen::Matrix3d& x) {
+Vector3d vee(const Matrix3d& x) {
     // Make skew-symmetric if needed
-    Eigen::Matrix3d x_skew = (x - x.transpose()) / 2.0;
-    Eigen::Vector3d result;
+    Matrix3d x_skew = (x - x.transpose()) / 2.0;
+    Vector3d result;
     result << x_skew(2,1), x_skew(0,2), x_skew(1,0);
     return result;
 }
 
-UnitVectorDerivatives deriv_unit_vector(const Eigen::Vector3d& A, 
-                                        const Eigen::Vector3d& A_dot, 
-                                        const Eigen::Vector3d& A_2dot) {
+UnitVectorDerivatives deriv_unit_vector(const Vector3d& A, 
+                                        const Vector3d& A_dot, 
+                                        const Vector3d& A_2dot) {
     double nA = A.norm();
     
     if (std::abs(nA) < 1.0e-9) {
@@ -57,8 +58,8 @@ Eigen::VectorXd saturate(const Eigen::VectorXd& x, double x_min, double x_max) {
     return result;
 }
 
-Eigen::Vector3d saturate(const Eigen::Vector3d& x, double x_min, double x_max) {
-    Eigen::Vector3d result = x;
+Vector3d saturate(const Vector3d& x, double x_min, double x_max) {
+    Vector3d result = x;
     for (int i = 0; i < 3; i++) {
         if (result[i] > x_max) {
             result[i] = x_max;

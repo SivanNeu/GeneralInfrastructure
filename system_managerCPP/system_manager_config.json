@@ -1,0 +1,21 @@
+{
+  "config_dir": "../logs/",
+  "log_dir": "config/",
+  "currentTime": -1.0,
+  "dronemass": 0.55,
+  "heading_dir_ned": [-1.0, 1.0, 0.0],
+  "desiredHeadingDir_ned": [-1.0, 1.0, 0.0],
+  "missionType": "WAYPOINT",
+  "yawControlType": "DEFINED_DIR",
+  "yawCommandFactor": 1.0,
+  "maximalVelocity": 0.75,
+  "descentVelocity": 10.0,
+  "targetVelocity": 7.5,
+  "originOffset_frd": [0.0, 0.0, 0.0],
+  "terminalHomingAlowed": true,
+  "circleRadius": 5.0,
+  "controllerType": "VELOCITYRL",
+  "yawCommandType": "RATE",
+  "rateControlEnabled": false
+}
+

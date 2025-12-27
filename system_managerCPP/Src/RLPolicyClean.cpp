@@ -64,8 +64,8 @@ std::shared_ptr<torch::nn::Sequential> RLPolicyClean::_build_encoder_from_ckpt(
 }
 
 void RLPolicyClean::_init_modules(
-    const Eigen::VectorXd& obs_mean,
-    const Eigen::VectorXd& obs_var,
+    const VectorXd& obs_mean,
+    const VectorXd& obs_var,
     std::shared_ptr<torch::nn::Sequential> encoder,
     std::shared_ptr<torch::nn::GRU> core,
     std::shared_ptr<torch::nn::Linear> dist_linear,
@@ -82,8 +82,8 @@ void RLPolicyClean::_init_modules(
     this->gru_hidden_size = gru_hidden_size;
 }
 
-std::pair<Eigen::VectorXd, Eigen::VectorXd> RLPolicyClean::forward(
-    const Eigen::VectorXd& obs,
+std::pair<VectorXd, VectorXd> RLPolicyClean::forward(
+    const VectorXd& obs,
     bool normalized) {
     
     if (!encoder || !core || !dist_linear) {
@@ -154,14 +154,14 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> RLPolicyClean::forward(
     torch::Tensor action_logits = torch::cat({mean, logstd}, 1);
     
     // Convert back to Eigen
-    Eigen::VectorXd action_logits_eigen(action_logits.size(1));
+    VectorXd action_logits_eigen(action_logits.size(1));
     auto action_logits_cpu = action_logits.cpu();
     auto action_logits_accessor = action_logits_cpu.accessor<float, 2>();
     for (int i = 0; i < action_logits.size(1); i++) {
         action_logits_eigen[i] = static_cast<double>(action_logits_accessor[0][i]);
     }
     
-    Eigen::VectorXd h_next_eigen(h_next.size(2));
+    VectorXd h_next_eigen(h_next.size(2));
     auto h_next_cpu = h_next.cpu();
     auto h_next_accessor = h_next_cpu.accessor<float, 3>();
     for (int i = 0; i < h_next.size(2); i++) {
@@ -177,7 +177,7 @@ void RLPolicyClean::reset_hidden_state(int batch_size) {
     }
 }
 
-void RLPolicyClean::set_hidden_state(const Eigen::VectorXd& hxs_vec) {
+void RLPolicyClean::set_hidden_state(const VectorXd& hxs_vec) {
     std::vector<double> hxs_vec_data(hxs_vec.data(), hxs_vec.data() + hxs_vec.size());
     torch::Tensor hxs_tensor = torch::from_blob(
         hxs_vec_data.data(),
@@ -273,13 +273,13 @@ std::shared_ptr<RLPolicyClean> RLPolicyClean::load_from_checkpoint(
         }
         
         int obs_size = 4;  // Default
-        Eigen::VectorXd obs_mean_vec;
-        Eigen::VectorXd obs_var_vec;
+        VectorXd obs_mean_vec;
+        VectorXd obs_var_vec;
         
         if (found_mean && found_var) {
             obs_size = obs_mean_tensor.size(0);
-            obs_mean_vec = Eigen::VectorXd(obs_size);
-            obs_var_vec = Eigen::VectorXd(obs_size);
+            obs_mean_vec = VectorXd(obs_size);
+            obs_var_vec = VectorXd(obs_size);
             
             auto mean_accessor = obs_mean_tensor.accessor<float, 1>();
             auto var_accessor = obs_var_tensor.accessor<float, 1>();
@@ -289,8 +289,8 @@ std::shared_ptr<RLPolicyClean> RLPolicyClean::load_from_checkpoint(
             }
         } else {
             // Fallback: use zeros and ones
-            obs_mean_vec = Eigen::VectorXd::Zero(obs_size);
-            obs_var_vec = Eigen::VectorXd::Ones(obs_size);
+            obs_mean_vec = VectorXd::Zero(obs_size);
+            obs_var_vec = VectorXd::Ones(obs_size);
         }
         
         // Build encoder (simplified - would parse checkpoint keys)
@@ -323,8 +323,8 @@ std::shared_ptr<RLPolicyClean> RLPolicyClean::load_from_checkpoint(
         
         // Fallback: create minimal policy
         int obs_size = 4;
-        Eigen::VectorXd obs_mean_vec = Eigen::VectorXd::Zero(obs_size);
-        Eigen::VectorXd obs_var_vec = Eigen::VectorXd::Ones(obs_size);
+        VectorXd obs_mean_vec = VectorXd::Zero(obs_size);
+        VectorXd obs_var_vec = VectorXd::Ones(obs_size);
         
         auto encoder_module = _build_encoder_from_ckpt(path, nonlinearity, jit_encoder);
         int gru_hidden_size_fallback = 512;

@@ -1,4 +1,5 @@
 #include "Control.h"
+#include "general.h"
 #include "VelocityPIDController.h"
 #include "VelocityRLController.h"
 #include "utils/GeneralFuncs.h"
@@ -17,7 +18,7 @@ Control::Control(const std::string& config_dir, const std::string& log_directory
       _min_thrust(0.01), _max_thrust(1.0), MaximalThrust(1.0),
       enableIntegrator(false), controlnode(controller),
       _last_pitch_update(TimeUtils::now()), _finished_stationary_tracking(false),
-      _current_pos_ned(Eigen::Vector3d::Zero()), _current_vel_ned(Eigen::Vector3d::Zero()) {
+      _current_pos_ned(Vector3d::Zero()), _current_vel_ned(Vector3d::Zero()) {
     
     // Try to get MaximalThrust from controller
     // This is a simplified version - in practice you'd use a base class interface
@@ -35,20 +36,20 @@ Control::Control(const std::string& config_dir, const std::string& log_directory
     _guidance = std::make_unique<Guidance>(guidance_constant_N, guidance_type);
 }
 
-std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
-    const Eigen::Vector3d& pos_ned, const Eigen::Vector3d& vel_ned,
-    const Eigen::Vector3d& accel_ned, const Eigen::Vector3d& gyro_ned,
+std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
+    const Vector3d& pos_ned, const Vector3d& vel_ned,
+    const Vector3d& accel_ned, const Vector3d& gyro_ned,
     const Quaternion& quat_ned_bodyfrd, int64_t imu_ts, double step_dt,
     int64_t current_ts, int counter,
-    const std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>& trajDest_ned,
+    const std::tuple<Vector3d, Vector3d, Vector3d>& trajDest_ned,
     Flight_Data& currentData,
-    const std::optional<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>& headingDest,
+    const std::optional<std::tuple<Vector3d, Vector3d, Vector3d>>& headingDest,
     const std::optional<std::vector<bool>>& controlType,
     bool log_data,
     const std::optional<HOMING_STAGE>& homingStage) {
     
-    Eigen::Vector3d b1d_dot = Eigen::Vector3d::Zero();
-    Eigen::Vector3d b1d_ddot = Eigen::Vector3d::Zero();
+    Vector3d b1d_dot = Vector3d::Zero();
+    Vector3d b1d_ddot = Vector3d::Zero();
     
     std::vector<bool> controlType_use;
     if (controlType.has_value()) {
@@ -57,12 +58,12 @@ std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
         controlType_use = {true, true, true, false, false, false};  // pos_control, vel_control, yaw_control
     }
     
-    Eigen::Vector3d estimated_tar_pos_ned = std::get<0>(trajDest_ned);
-    Eigen::Vector3d pos_des_ned = std::get<0>(trajDest_ned);
-    Eigen::Vector3d vel_des_ned = std::get<1>(trajDest_ned);
-    Eigen::Vector3d accel_des_ned = std::get<2>(trajDest_ned);
+    Vector3d estimated_tar_pos_ned = std::get<0>(trajDest_ned);
+    Vector3d pos_des_ned = std::get<0>(trajDest_ned);
+    Vector3d vel_des_ned = std::get<1>(trajDest_ned);
+    Vector3d accel_des_ned = std::get<2>(trajDest_ned);
     
-    Eigen::Vector3d b1d_ned(1, 0, 0);
+    Vector3d b1d_ned(1, 0, 0);
     if (headingDest.has_value()) {
         b1d_ned = std::get<0>(headingDest.value());
         b1d_dot = std::get<1>(headingDest.value());
@@ -75,14 +76,14 @@ std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
     // Prepare body state tuples
     auto currentBodyState = std::make_tuple(pos_ned, vel_ned, accel_ned, gyro_ned, quat_ned_bodyfrd);
     auto desiredBodyState = std::make_tuple(
-        std::make_tuple(pos_des_ned, vel_des_ned, accel_des_ned, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero()),
+        std::make_tuple(pos_des_ned, vel_des_ned, accel_des_ned, Vector3d::Zero(), Vector3d::Zero()),
         std::make_tuple(b1d_ned, b1d_dot, b1d_ddot)
     );
     
     // Get command from controller - need to cast based on controller type
-    Eigen::Vector3d f_total;
-    Eigen::Matrix3d R_desired;
-    Eigen::Vector3d Omega_desired_frd;
+    Vector3d f_total;
+    Matrix3d R_desired;
+    Vector3d Omega_desired_frd;
     Eigen::VectorXd obs;
     
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYPID;
@@ -108,18 +109,18 @@ std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
             obs = std::get<3>(result);
         } catch (...) {
             // Fallback - would need other controller types
-            f_total = Eigen::Vector3d::Zero();
-            R_desired = Eigen::Matrix3d::Identity();
-            Omega_desired_frd = Eigen::Vector3d::Zero();
+            f_total = Vector3d::Zero();
+            R_desired = Matrix3d::Identity();
+            Omega_desired_frd = Vector3d::Zero();
             obs = Eigen::VectorXd::Zero(9);
         }
     }
     
-    Eigen::Vector3d command;
+    Vector3d command;
     
     // Determine controller type and process command accordingly
     if (controllerType == CONTROLLER_TYPE::VELOCITYPID) {
-        Eigen::Vector3d velCmdDir = Eigen::Vector3d::Zero();
+        Vector3d velCmdDir = Vector3d::Zero();
         if (f_total.norm() > 0) {
             velCmdDir = f_total / f_total.norm();
         }
@@ -129,18 +130,18 @@ std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
     } else if (controllerType == CONTROLLER_TYPE::VELOCITYRL) {
         command = f_total;
     } else if (controllerType == CONTROLLER_TYPE::ACCELERATIONPID) {
-        Eigen::Vector3d accCmdDir = f_total / f_total.norm();
+        Vector3d accCmdDir = f_total / f_total.norm();
         double accCmdAbs = f_total.norm();
         double accCmdAbsClipped = std::max(0.0, std::min(accCmdAbs, MAXIMALACCELERATION));
         command = accCmdDir * accCmdAbsClipped;
     } else {
-        Eigen::Vector3d thrust_cmd = f_total / (MaximalThrust * 0.7);
-        command = thrust_cmd.cwiseMin(Eigen::Vector3d::Constant(_max_thrust))
-                         .cwiseMax(Eigen::Vector3d::Constant(_min_thrust));
+        Vector3d thrust_cmd = f_total / (MaximalThrust * 0.7);
+        command = thrust_cmd.cwiseMin(Vector3d::Constant(_max_thrust))
+                         .cwiseMax(Vector3d::Constant(_min_thrust));
     }
     
     Quaternion quat_ned_desbodyfrd = Quaternion::from_matrix(R_desired);
-    Eigen::Vector3d rpyRate_cmd = Omega_desired_frd;
+    Vector3d rpyRate_cmd = Omega_desired_frd;
     
     if (!log_data) {
         _control_logger.reset();
@@ -162,13 +163,13 @@ std::tuple<Eigen::Vector3d, Eigen::Vector3d, Quaternion> Control::get_cmd(
 
 Quaternion Control::rotate2cameraDirection(const Quaternion& quat_ned_desbodyfrd,
                                           const Quaternion& quat_bodyfrd_cam,
-                                          const Eigen::Vector3d& los_ned_dir,
+                                          const Vector3d& los_ned_dir,
                                           bool plotFig) {
     Quaternion quat_desbodyfrd_cam = quat_bodyfrd_cam;
-    Eigen::Vector3d rotAxisZfrd_ned = quat_ned_desbodyfrd.rotate_vec(Eigen::Vector3d(0, 0, 1));
-    Eigen::Vector3d rotAxisZfrd_ned_dir = rotAxisZfrd_ned / rotAxisZfrd_ned.norm();
-    Eigen::Vector3d camZ_ned = (quat_ned_desbodyfrd * quat_desbodyfrd_cam).rotate_vec(Eigen::Vector3d(0, 0, -1));
-    Eigen::Vector3d camZ_ned_dir = camZ_ned / camZ_ned.norm();
+    Vector3d rotAxisZfrd_ned = quat_ned_desbodyfrd.rotate_vec(Vector3d(0, 0, 1));
+    Vector3d rotAxisZfrd_ned_dir = rotAxisZfrd_ned / rotAxisZfrd_ned.norm();
+    Vector3d camZ_ned = (quat_ned_desbodyfrd * quat_desbodyfrd_cam).rotate_vec(Vector3d(0, 0, -1));
+    Vector3d camZ_ned_dir = camZ_ned / camZ_ned.norm();
     
     // Find optimal rotation angle
     std::vector<double> los_cam_angle(360);
@@ -178,8 +179,8 @@ Quaternion Control::rotate2cameraDirection(const Quaternion& quat_ned_desbodyfrd
     for (int i = 0; i < 360; i++) {
         double rotAngle = i * M_PI / 180.0;
         Quaternion quat_Z_axis_rot_ned = Quaternion::from_axis_angle(rotAxisZfrd_ned_dir, rotAngle);
-        Eigen::Vector3d camZ_rotated_ned_dir = quat_Z_axis_rot_ned.rotate_vec(camZ_ned_dir);
-        Eigen::Vector3d cross = camZ_rotated_ned_dir.cross(los_ned_dir);
+        Vector3d camZ_rotated_ned_dir = quat_Z_axis_rot_ned.rotate_vec(camZ_ned_dir);
+        Vector3d cross = camZ_rotated_ned_dir.cross(los_ned_dir);
         double dot = camZ_rotated_ned_dir.dot(los_ned_dir);
         los_cam_angle[i] = std::atan2(cross.norm(), dot);
         
@@ -201,14 +202,14 @@ Quaternion Control::rotate2cameraDirection(const Quaternion& quat_ned_desbodyfrd
     return quat_ned_desbodyfrd_new;
 }
 
-void Control::log_control_data(const Eigen::Vector3d& command, const Eigen::Vector3d& rpy_rate_cmd,
-                               const Quaternion& quat_ned_desbodyfrd_cmd, const Eigen::Vector3d& Omega_desired_frd,
-                               const Eigen::Vector3d& current_pos_ned, const Eigen::Vector3d& cur_vel_ned,
-                               const Eigen::Vector3d& gyro_ned, const Eigen::Vector3d& accel_ned,
+void Control::log_control_data(const Vector3d& command, const Vector3d& rpy_rate_cmd,
+                               const Quaternion& quat_ned_desbodyfrd_cmd, const Vector3d& Omega_desired_frd,
+                               const Vector3d& current_pos_ned, const Vector3d& cur_vel_ned,
+                               const Vector3d& gyro_ned, const Vector3d& accel_ned,
                                const Quaternion& quat_ned_bodyfrd, int64_t imu_ts, double dt,
                                int64_t current_ts, int counter,
-                               const Eigen::Vector3d& est_tar_pos_ned,
-                               const Eigen::Vector3d& vel_des_ned,
+                               const Vector3d& est_tar_pos_ned,
+                               const Vector3d& vel_des_ned,
                                const Eigen::VectorXd& obs,
                                int modeID, double timestamp) {
     std::map<std::string, std::string> logDict;

@@ -1,5 +1,6 @@
 #ifndef VELOCITY_RL_CONTROLLER_H
 #define VELOCITY_RL_CONTROLLER_H
+#include "general.h"
 
 #include "utils/ControllerType.h"
 #include "utils/Quaternion.h"
@@ -25,11 +26,11 @@ private:
     double lastTime;
     double current_time;
     
-    Eigen::Vector3d pos_self;
-    Eigen::Vector3d vel_self;
-    Eigen::Vector3d pos_target;
-    Eigen::Vector3d heading_target;
-    Eigen::Vector3d vel_target;
+    Vector3d pos_self;
+    Vector3d vel_self;
+    Vector3d pos_target;
+    Vector3d heading_target;
+    Vector3d vel_target;
     
     double max_vel;
     double max_range;
@@ -50,10 +51,10 @@ private:
 public:
     VelocityRLController(double mass = 0.5, double maximalVelocity = 3.0, double currentTime = 0.0);
     
-    std::tuple<Eigen::Vector3d, Eigen::Matrix3d, Eigen::Vector3d, Eigen::VectorXd> getCommand(
-        const std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Quaternion>& currentBodyState,
-        const std::tuple<std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>,
-                        std::tuple<Eigen::Vector3d, Eigen::Vector3d, Eigen::Vector3d>>& desiredBodyState,
+    std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> getCommand(
+        const std::tuple<Vector3d, Vector3d, Vector3d, Vector3d, Quaternion>& currentBodyState,
+        const std::tuple<std::tuple<Vector3d, Vector3d, Vector3d, Vector3d, Vector3d>,
+                        std::tuple<Vector3d, Vector3d, Vector3d>>& desiredBodyState,
         const std::vector<bool>& controlType = {},
         Flight_Data* currentData = nullptr);
     

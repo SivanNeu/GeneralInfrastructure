@@ -1,5 +1,6 @@
 #ifndef COMMON_CONSTANTS_H
 #define COMMON_CONSTANTS_H
+#include "general.h"
 
 #include <string>
 

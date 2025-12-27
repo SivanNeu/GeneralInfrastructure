@@ -1,5 +1,6 @@
 #ifndef YAW_COMMAND_H
 #define YAW_COMMAND_H
+#include "general.h"
 
 enum class YAW_COMMAND {
     NO_CONTROL = 0,      // no yaw control

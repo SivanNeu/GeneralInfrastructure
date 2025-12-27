@@ -1,5 +1,6 @@
 #ifndef VIRTUAL_TARGET_H
 #define VIRTUAL_TARGET_H
+#include "general.h"
 
 class Virtual_Target {
 public:

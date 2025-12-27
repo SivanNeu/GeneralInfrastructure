@@ -1,5 +1,6 @@
 #ifndef FEATURE_LIST_H
 #define FEATURE_LIST_H
+#include "general.h"
 
 #include "utils/Feature.h"
 #include <vector>
