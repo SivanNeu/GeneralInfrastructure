@@ -10,13 +10,24 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <fstream>
+#include <sstream>
+#include <regex>
 
 // Forward declaration for RL policy (Python-specific, will need implementation)
 // class RLPolicyClean;
 
 struct VelocityRLControllerParameters {
     double mass;
+    double max_vel;
+    double max_range;
+    double int_scale;
+    double max_omega;
+    std::string rlFilePathVfVr;
+    std::string rlFilePathOmegaYaw;
+    
     VelocityRLControllerParameters(double mass = 0.5);
+    static VelocityRLControllerParameters loadFromJSON(const std::string& jsonFilePath);
 };
 
 class VelocityRLController {
@@ -50,6 +61,7 @@ private:
 
 public:
     VelocityRLController(double mass = 0.5, double maximalVelocity = 3.0, double currentTime = 0.0);
+    VelocityRLController(const VelocityRLControllerParameters& params, double maximalVelocity = 3.0, double currentTime = 0.0);
     
     std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> getCommand(
         const std::tuple<Vector3d, Vector3d, Vector3d, Vector3d, Quaternion>& currentBodyState,

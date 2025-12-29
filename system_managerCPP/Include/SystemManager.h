@@ -158,7 +158,7 @@ private:
     std::optional<std::tuple<Vector3d, Vector3d, Quaternion, double, double>> 
         generateCommand(const std::tuple<Vector3d, Vector3d, Vector3d>& trajDest,
                        const std::vector<bool>& controlType, double current_ts, int counter,
-                       const Quaternion& quat_ned_bodyfrd);
+                       const Quaternion& quat_ned_bodyfrd, bool log_data = true);
     CommandMessage publishCommand(const Vector3d& command, double yawCmd, double yawCmdRate,
                                  const Vector3d& rpyRate_cmd, const Quaternion& quat_ned_desbodyfrd_cmd);
     Quaternion getQuadBodyfrdCamera(double nedYangle);
@@ -184,6 +184,10 @@ public:
                  bool terminalHomingAlowed = true,
                  double circleRadius = 5.0,
                  CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYRL,
+                 CONTROLLER_TYPE primaryControllerType = CONTROLLER_TYPE::VELOCITYRL,
+                 const std::string& primaryControllerParamsFile = "",
+                 CONTROLLER_TYPE secondaryControllerType = CONTROLLER_TYPE::VELOCITYPID,
+                 const std::string& secondaryControllerParamsFile = "",
                  YAW_COMMAND_TYPE yawCommandType = YAW_COMMAND_TYPE::RATE,
                  bool rateControlEnabled = false);
     ~SystemManager();

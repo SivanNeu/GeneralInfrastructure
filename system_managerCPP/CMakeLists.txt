@@ -49,6 +49,7 @@ set(UTILS_SOURCES
     Src/utils/FlightData.cpp
     Src/utils/GeneralFuncs.cpp
     Src/utils/Imu.cpp
+    Src/utils/JsonFile.cpp
     Src/utils/LLA.cpp
     Src/utils/Logger.cpp
     Src/utils/LowPassFilter.cpp

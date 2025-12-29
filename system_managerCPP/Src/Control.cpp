@@ -87,12 +87,14 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
     Eigen::VectorXd obs;
     
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYPID;
+    std::string controller_name = "unknown";
     
     // Try to determine controller type and call appropriate method
     // This would be better with a base Controller interface
     try {
         VelocityPIDController* pid_controller = static_cast<VelocityPIDController*>(controlnode);
         controllerType = pid_controller->getControllerType();
+        controller_name = pid_controller->getControllerName();
         auto result = pid_controller->getCommand(currentBodyState, desiredBodyState, controlType_use, &currentData);
         f_total = std::get<0>(result);
         R_desired = std::get<1>(result);
@@ -102,6 +104,7 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
         try {
             VelocityRLController* rl_controller = static_cast<VelocityRLController*>(controlnode);
             controllerType = rl_controller->getControllerType();
+            controller_name = rl_controller->getControllerName();
             auto result = rl_controller->getCommand(currentBodyState, desiredBodyState, controlType_use, &currentData);
             f_total = std::get<0>(result);
             R_desired = std::get<1>(result);
@@ -144,9 +147,13 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
     Vector3d rpyRate_cmd = Omega_desired_frd;
     
     if (!log_data) {
-        _control_logger.reset();
+        // Close logger when leaving OFFBOARD mode
+        if (_control_logger) {
+            _control_logger->close();
+            _control_logger.reset();
+        }
     } else if (log_data && !_control_logger) {
-        std::string log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + "controller";
+        std::string log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + controller_name;
         _control_logger = std::make_unique<Logger>(log_name, log_directory, true, false, "CSV");
     }
     

@@ -1,6 +1,7 @@
 #include "SystemManager.h"
 #include "general.h"
 #include "utils/TimeUtils.h"
+#include "utils/JsonFile.h"
 #include <iostream>
 #include <chrono>
 #include <thread>
@@ -8,7 +9,6 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <regex>
 #include <cstdlib>
 #include <algorithm>
 
@@ -30,27 +30,14 @@ struct ConfigParams {
     bool terminalHomingAlowed = true;
     double circleRadius = 5.0;
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYRL;
+    CONTROLLER_TYPE primaryControllerType = CONTROLLER_TYPE::VELOCITYRL;
+    std::string primaryControllerParamsFile;
+    CONTROLLER_TYPE secondaryControllerType = CONTROLLER_TYPE::VELOCITYPID;
+    std::string secondaryControllerParamsFile;
     YAW_COMMAND_TYPE yawCommandType = YAW_COMMAND_TYPE::RATE;
     bool rateControlEnabled = false;
     bool valid = false;
 };
-
-// Helper function to parse Vector3d from JSON array [x, y, z]
-Vector3d parseVector3d(const std::string& content, const std::string& key) {
-    std::regex vec_regex("\"" + key + "\"\\s*:\\s*\\[\\s*(-?\\d+\\.?\\d*)\\s*,\\s*(-?\\d+\\.?\\d*)\\s*,\\s*(-?\\d+\\.?\\d*)\\s*\\]");
-    std::smatch match;
-    if (std::regex_search(content, match, vec_regex)) {
-        try {
-            double x = std::stod(match[1].str());
-            double y = std::stod(match[2].str());
-            double z = std::stod(match[3].str());
-            return Vector3d(x, y, z);
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse Vector3d for '" << key << "', using default" << std::endl;
-        }
-    }
-    return Vector3d::Zero();
-}
 
 // Helper function to parse enum from string
 MISSION_TYPE parseMissionType(const std::string& str) {
@@ -95,119 +82,75 @@ YAW_COMMAND_TYPE parseYawCommandType(const std::string& str) {
 
 ConfigParams parseConfigFile(const std::string& config_path) {
     ConfigParams params;
-    std::ifstream file(config_path);
     
-    if (!file.is_open()) {
+    // Load JSON file using JsonFile class
+    JsonFile json(config_path);
+    if (!json.isValid()) {
         std::cerr << "Error: Could not open config file: " << config_path << std::endl;
         return params;
     }
     
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string content = buffer.str();
-    file.close();
-    
-    // Extract config_dir - handle whitespace and quotes
-    std::regex config_dir_regex(R"regex("config_dir"\s*:\s*"([^"]+)")regex");
-    std::smatch match;
-    if (std::regex_search(content, match, config_dir_regex)) {
-        params.config_dir = match[1].str();
-    } else {
+    // Extract required string fields
+    params.config_dir = json.getString("config_dir", "");
+    if (params.config_dir.empty()) {
         std::cerr << "Warning: Could not find 'config_dir' in config file" << std::endl;
         return params;
     }
     
-    // Extract log_dir
-    std::regex log_dir_regex(R"regex("log_dir"\s*:\s*"([^"]+)")regex");
-    if (std::regex_search(content, match, log_dir_regex)) {
-        params.log_dir = match[1].str();
-    } else {
+    params.log_dir = json.getString("log_dir", "");
+    if (params.log_dir.empty()) {
         std::cerr << "Warning: Could not find 'log_dir' in config file" << std::endl;
         return params;
     }
     
-    // Extract currentTime (optional, defaults to -1.0)
-    std::regex currentTime_regex(R"regex("currentTime"\s*:\s*(-?\d+\.?\d*(?:[eE][+-]?\d+)?))regex");
-    if (std::regex_search(content, match, currentTime_regex)) {
-        try {
-            params.currentTime = std::stod(match[1].str());
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse 'currentTime', using default -1.0" << std::endl;
-            params.currentTime = -1.0;
-        }
-    }
-    
-    // Extract dronemass
-    std::regex dronemass_regex(R"regex("dronemass"\s*:\s*(-?\d+\.?\d*(?:[eE][+-]?\d+)?))regex");
-    if (std::regex_search(content, match, dronemass_regex)) {
-        try {
-            params.dronemass = std::stod(match[1].str());
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse 'dronemass', using default 0.55" << std::endl;
-        }
-    }
+    // Extract double values
+    params.currentTime = json.getDouble("currentTime", -1.0);
+    params.dronemass = json.getDouble("dronemass", 0.55);
+    params.yawCommandFactor = json.getDouble("yawCommandFactor", 1.0);
+    params.maximalVelocity = json.getDouble("maximalVelocity", 0.75);
+    params.descentVelocity = json.getDouble("descentVelocity", 10.0);
+    params.targetVelocity = json.getDouble("targetVelocity", 7.5);
+    params.circleRadius = json.getDouble("circleRadius", 5.0);
     
     // Extract Vector3d fields
-    params.heading_dir_ned = parseVector3d(content, "heading_dir_ned");
-    params.desiredHeadingDir_ned = parseVector3d(content, "desiredHeadingDir_ned");
-    params.originOffset_frd = parseVector3d(content, "originOffset_frd");
-    
-    // Extract missionType enum
-    std::regex missionType_regex(R"regex("missionType"\s*:\s*"([^"]+)")regex");
-    if (std::regex_search(content, match, missionType_regex)) {
-        params.missionType = parseMissionType(match[1].str());
-    }
-    
-    // Extract yawControlType enum
-    std::regex yawControlType_regex(R"regex("yawControlType"\s*:\s*"([^"]+)")regex");
-    if (std::regex_search(content, match, yawControlType_regex)) {
-        params.yawControlType = parseYawCommand(match[1].str());
-    }
-    
-    // Extract controllerType enum
-    std::regex controllerType_regex(R"regex("controllerType"\s*:\s*"([^"]+)")regex");
-    if (std::regex_search(content, match, controllerType_regex)) {
-        params.controllerType = parseControllerType(match[1].str());
-    }
-    
-    // Extract yawCommandType enum
-    std::regex yawCommandType_regex(R"regex("yawCommandType"\s*:\s*"([^"]+)")regex");
-    if (std::regex_search(content, match, yawCommandType_regex)) {
-        params.yawCommandType = parseYawCommandType(match[1].str());
-    }
-    
-    // Extract double values
-    auto parseDouble = [&content](const std::string& key, double& value, double default_val) {
-        std::regex regex("\"" + key + "\"\\s*:\\s*(-?\\d+\\.?\\d*(?:[eE][+-]?\\d+)?)");
-        std::smatch match;
-        if (std::regex_search(content, match, regex)) {
-            try {
-                value = std::stod(match[1].str());
-            } catch (const std::exception& e) {
-                value = default_val;
-            }
-        }
-    };
-    
-    parseDouble("yawCommandFactor", params.yawCommandFactor, 1.0);
-    parseDouble("maximalVelocity", params.maximalVelocity, 0.75);
-    parseDouble("descentVelocity", params.descentVelocity, 10.0);
-    parseDouble("targetVelocity", params.targetVelocity, 7.5);
-    parseDouble("circleRadius", params.circleRadius, 5.0);
+    params.heading_dir_ned = json.getVector3d("heading_dir_ned", Vector3d(-1, 1, 0));
+    params.desiredHeadingDir_ned = json.getVector3d("desiredHeadingDir_ned", Vector3d(-1, 1, 0));
+    params.originOffset_frd = json.getVector3d("originOffset_frd", Vector3d::Zero());
     
     // Extract boolean values
-    auto parseBool = [&content](const std::string& key, bool& value, bool default_val) {
-        std::regex regex("\"" + key + "\"\\s*:\\s*(true|false)");
-        std::smatch match;
-        if (std::regex_search(content, match, regex)) {
-            value = (match[1].str() == "true");
-        } else {
-            value = default_val;
-        }
-    };
+    params.terminalHomingAlowed = json.getBool("terminalHomingAlowed", true);
+    params.rateControlEnabled = json.getBool("rateControlEnabled", false);
     
-    parseBool("terminalHomingAlowed", params.terminalHomingAlowed, true);
-    parseBool("rateControlEnabled", params.rateControlEnabled, false);
+    // Extract enum values (need to parse strings)
+    std::string missionTypeStr = json.getString("missionType", "WAYPOINT");
+    params.missionType = parseMissionType(missionTypeStr);
+    
+    std::string yawControlTypeStr = json.getString("yawControlType", "DEFINED_DIR");
+    params.yawControlType = parseYawCommand(yawControlTypeStr);
+    
+    std::string controllerTypeStr = json.getString("controllerType", "VELOCITYRL");
+    params.controllerType = parseControllerType(controllerTypeStr);
+    
+    std::string primaryControllerTypeStr = json.getString("primaryControllerType", "");
+    if (!primaryControllerTypeStr.empty()) {
+        params.primaryControllerType = parseControllerType(primaryControllerTypeStr);
+    } else {
+        // Fall back to controllerType if primaryControllerType not specified
+        params.primaryControllerType = params.controllerType;
+    }
+    
+    params.primaryControllerParamsFile = json.getString("primaryControllerParamsFile", "");
+    
+    std::string secondaryControllerTypeStr = json.getString("secondaryControllerType", "");
+    if (!secondaryControllerTypeStr.empty()) {
+        params.secondaryControllerType = parseControllerType(secondaryControllerTypeStr);
+    }
+    // If empty string, keep default (VELOCITYPID)
+    
+    params.secondaryControllerParamsFile = json.getString("secondaryControllerParamsFile", "");
+    
+    std::string yawCommandTypeStr = json.getString("yawCommandType", "RATE");
+    params.yawCommandType = parseYawCommandType(yawCommandTypeStr);
     
     params.valid = true;
     return params;
@@ -309,6 +252,10 @@ int main(int argc, char* argv[]) {
             std::cout << "  terminalHomingAlowed: " << (config.terminalHomingAlowed ? "true" : "false") << std::endl;
             std::cout << "  circleRadius: " << config.circleRadius << std::endl;
             std::cout << "  controllerType: " << static_cast<int>(config.controllerType) << std::endl;
+            std::cout << "  primaryControllerType: " << static_cast<int>(config.primaryControllerType) << std::endl;
+            std::cout << "  primaryControllerParamsFile: " << config.primaryControllerParamsFile << std::endl;
+            std::cout << "  secondaryControllerType: " << static_cast<int>(config.secondaryControllerType) << std::endl;
+            std::cout << "  secondaryControllerParamsFile: " << config.secondaryControllerParamsFile << std::endl;
             std::cout << "  yawCommandType: " << static_cast<int>(config.yawCommandType) << std::endl;
             std::cout << "  rateControlEnabled: " << (config.rateControlEnabled ? "true" : "false") << std::endl;
         }
@@ -328,6 +275,10 @@ int main(int argc, char* argv[]) {
                             config.terminalHomingAlowed,
                             config.circleRadius,
                             config.controllerType,
+                            config.primaryControllerType,
+                            config.primaryControllerParamsFile,
+                            config.secondaryControllerType,
+                            config.secondaryControllerParamsFile,
                             config.yawCommandType,
                             config.rateControlEnabled);
         

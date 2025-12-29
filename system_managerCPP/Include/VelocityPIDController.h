@@ -11,6 +11,10 @@
 #include "utils/FlightData.h"
 #include <Eigen/Dense>
 #include <memory>
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <regex>
 
 // Forward declaration
 class Flight_Data;
@@ -30,6 +34,7 @@ struct VelocityPIDControllerParameters {
     double sat_sigmaYaw;
 
     VelocityPIDControllerParameters(double mass = 0.5);
+    static VelocityPIDControllerParameters loadFromJSON(const std::string& jsonFilePath);
 };
 
 class VelocityPIDController {
@@ -59,6 +64,7 @@ private:
 
 public:
     VelocityPIDController(double mass, double currentTime = 0.0, YAW_COMMAND_TYPE yawCommandType = YAW_COMMAND_TYPE::NONE);
+    VelocityPIDController(const VelocityPIDControllerParameters& params, double currentTime = 0.0, YAW_COMMAND_TYPE yawCommandType = YAW_COMMAND_TYPE::NONE);
     
     void resetIntegralErrorTerms();
     std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> getCommand(

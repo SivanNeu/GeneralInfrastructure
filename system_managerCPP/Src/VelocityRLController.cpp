@@ -1,32 +1,69 @@
 #include "VelocityRLController.h"
 #include "general.h"
 #include "utils/FlightData.h"
+#include "utils/JsonFile.h"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
-VelocityRLControllerParameters::VelocityRLControllerParameters(double mass) : mass(mass) {
+VelocityRLControllerParameters::VelocityRLControllerParameters(double mass) 
+    : mass(mass), max_vel(3.0), max_range(15.0), int_scale(300.0), 
+      max_omega(M_PI / 2.0),
+      rlFilePathVfVr("./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth"),
+      rlFilePathOmegaYaw("./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth") {
+}
+
+VelocityRLControllerParameters VelocityRLControllerParameters::loadFromJSON(const std::string& jsonFilePath) {
+    VelocityRLControllerParameters params(0.5); // Default mass
+    
+    JsonFile json(jsonFilePath);
+    if (!json.isValid()) {
+        std::cerr << "Warning: Could not load controller parameter file: " << jsonFilePath << std::endl;
+        std::cerr << "  Using default parameters" << std::endl;
+        return params;
+    }
+    
+    // Load all parameters using JsonFile
+    params.mass = json.getDouble("mass", 0.5);
+    params.max_vel = json.getDouble("max_vel", 3.0);
+    params.max_range = json.getDouble("max_range", 15.0);
+    params.int_scale = json.getDouble("int_scale", 300.0);
+    params.max_omega = json.getDouble("max_omega", M_PI / 2.0);
+    params.rlFilePathVfVr = json.getString("rlFilePathVfVr", "./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth");
+    params.rlFilePathOmegaYaw = json.getString("rlFilePathOmegaYaw", "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth");
+    
+    std::cout << "Loaded RL controller parameters from: " << jsonFilePath << std::endl;
+    return params;
 }
 
 VelocityRLController::VelocityRLController(double mass, double maximalVelocity, double currentTime)
+    : VelocityRLController(VelocityRLControllerParameters(mass), maximalVelocity, currentTime) {
+}
+
+VelocityRLController::VelocityRLController(const VelocityRLControllerParameters& params, double maximalVelocity, double currentTime)
     : controllerName("VelocityRL"), controllerType(CONTROLLER_TYPE::VELOCITYRL),
       lastTime(currentTime), current_time(currentTime),
       pos_self(Vector3d::Zero()), vel_self(Vector3d::Zero()),
       pos_target(Vector3d::Zero()), heading_target(Vector3d::Zero()),
       vel_target(Vector3d::Zero()),
-      max_vel(maximalVelocity), max_range(15.0), int_scale(max_range * 20.0),
-      max_omega(M_PI / 2.0), ringLen(1), ringV(Eigen::MatrixXd::Zero(2, ringLen)),
-      ringIndex(0), ringAverage(Eigen::Vector2d::Zero()), param(mass),
+      max_vel(params.max_vel > 0 ? params.max_vel : maximalVelocity), 
+      max_range(params.max_range), 
+      int_scale(params.int_scale > 0 ? params.int_scale : (params.max_range * 20.0)),
+      max_omega(params.max_omega), 
+      ringLen(1), ringV(Eigen::MatrixXd::Zero(2, ringLen)),
+      ringIndex(0), ringAverage(Eigen::Vector2d::Zero()), param(params),
       rl_policyVfVr(nullptr), rl_policyOmegaYaw(nullptr) {
-    // RL policy loading - paths would be configurable
-    std::string rlFilePathVfVr = "./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth";
-    std::string rlFilePathOmegaYaw = "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth";
-    
+    // RL policy loading from parameters
     try {
-        std::cout << "Loading RL policy from: " << rlFilePathVfVr << std::endl;
-        rl_policyVfVr = RLPolicyClean::load_from_checkpoint(rlFilePathVfVr, "cpu", "relu", false);
+        if (!params.rlFilePathVfVr.empty()) {
+            std::cout << "Loading RL policy from: " << params.rlFilePathVfVr << std::endl;
+            rl_policyVfVr = RLPolicyClean::load_from_checkpoint(params.rlFilePathVfVr, "cpu", "relu", false);
+        }
         
-        std::cout << "Loading RL policy from: " << rlFilePathOmegaYaw << std::endl;
-        rl_policyOmegaYaw = RLPolicyClean::load_from_checkpoint(rlFilePathOmegaYaw, "cpu", "relu", false);
+        if (!params.rlFilePathOmegaYaw.empty()) {
+            std::cout << "Loading RL policy from: " << params.rlFilePathOmegaYaw << std::endl;
+            rl_policyOmegaYaw = RLPolicyClean::load_from_checkpoint(params.rlFilePathOmegaYaw, "cpu", "relu", false);
+        }
     } catch (const std::exception& e) {
         std::cerr << "Warning: Failed to load RL policies: " << e.what() << std::endl;
         std::cerr << "RL controller will use placeholder inference" << std::endl;

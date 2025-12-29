@@ -23,6 +23,10 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
                              bool terminalHomingAlowed,
                              double circleRadius,
                              CONTROLLER_TYPE controllerType,
+                             CONTROLLER_TYPE primaryControllerType,
+                             const std::string& primaryControllerParamsFile,
+                             CONTROLLER_TYPE secondaryControllerType,
+                             const std::string& secondaryControllerParamsFile,
                              YAW_COMMAND_TYPE yawCommandType,
                              bool rateControlEnabled)
     : _config_dir(config_dir), _log_dir(log_dir),
@@ -52,16 +56,50 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
     
     std::cout << "System_Manager: Initializing..." << std::endl;
     
-    // Initialize controllers
-    if (controllerType == CONTROLLER_TYPE::VELOCITYRL) {
-        auto auxController = std::make_unique<VelocityPIDController>(dronemass, _overall_start);
+    // Initialize controllers with parameters from JSON files
+    // Use primaryControllerType (which falls back to controllerType in main.cpp if not specified)
+    
+    // Initialize main controller
+    if (primaryControllerType == CONTROLLER_TYPE::VELOCITYRL) {
+        VelocityRLControllerParameters rlParams(dronemass);
+        if (!primaryControllerParamsFile.empty()) {
+            rlParams = VelocityRLControllerParameters::loadFromJSON(primaryControllerParamsFile);
+        }
+        auto mainController = std::make_unique<VelocityRLController>(rlParams, maximalVelocity, _overall_start);
+        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
+    } else if (primaryControllerType == CONTROLLER_TYPE::VELOCITYPID) {
+        VelocityPIDControllerParameters pidParams(dronemass);
+        if (!primaryControllerParamsFile.empty()) {
+            pidParams = VelocityPIDControllerParameters::loadFromJSON(primaryControllerParamsFile);
+        }
+        auto mainController = std::make_unique<VelocityPIDController>(pidParams, _overall_start, yawCommandType);
+        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
+    }
+    
+    // Initialize secondary/auxiliary controller
+    // If RL is primary, always create PID auxiliary (backward compatibility)
+    // Otherwise, create secondary controller only if params file is specified
+    if (primaryControllerType == CONTROLLER_TYPE::VELOCITYRL) {
+        // Default: use PID as auxiliary when RL is main
+        VelocityPIDControllerParameters auxParams(dronemass);
+        if (!secondaryControllerParamsFile.empty()) {
+            auxParams = VelocityPIDControllerParameters::loadFromJSON(secondaryControllerParamsFile);
+        }
+        auto auxController = std::make_unique<VelocityPIDController>(auxParams, _overall_start, yawCommandType);
         _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
-        
-        auto mainController = std::make_unique<VelocityRLController>(dronemass, maximalVelocity, _overall_start);
-        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
-    } else if (controllerType == CONTROLLER_TYPE::VELOCITYPID) {
-        auto mainController = std::make_unique<VelocityPIDController>(dronemass, _overall_start, yawCommandType);
-        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
+    } else if (!secondaryControllerParamsFile.empty()) {
+        // Secondary controller explicitly specified via params file
+        if (secondaryControllerType == CONTROLLER_TYPE::VELOCITYPID) {
+            VelocityPIDControllerParameters auxParams(dronemass);
+            auxParams = VelocityPIDControllerParameters::loadFromJSON(secondaryControllerParamsFile);
+            auto auxController = std::make_unique<VelocityPIDController>(auxParams, _overall_start, yawCommandType);
+            _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
+        } else if (secondaryControllerType == CONTROLLER_TYPE::VELOCITYRL) {
+            VelocityRLControllerParameters auxParams(dronemass);
+            auxParams = VelocityRLControllerParameters::loadFromJSON(secondaryControllerParamsFile);
+            auto auxController = std::make_unique<VelocityRLController>(auxParams, maximalVelocity, _overall_start);
+            _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
+        }
     }
     
     // Setup ZMQ subscriber (matches zmqWrapper.py subscribe() function)
@@ -117,8 +155,11 @@ CommandMessage SystemManager::sys_manager_step(int counter, bool log_data, Fligh
     // Set desired state based on mission type
     auto [controlType, trajDest, pos_ned, quat_ned_bodyfrd, current_ts] = setDesiredState(curTime);
     
+    // Determine if we should log based on OFFBOARD mode (logger exists)
+    bool should_log = log_data && (_input_logger != nullptr);
+    
     // Generate command from controller
-    auto cmd_result = generateCommand(trajDest, controlType, current_ts, counter, quat_ned_bodyfrd);
+    auto cmd_result = generateCommand(trajDest, controlType, current_ts, counter, quat_ned_bodyfrd, should_log);
     if (!cmd_result.has_value()) {
         return CommandMessage();
     }
@@ -258,14 +299,14 @@ std::tuple<std::vector<bool>, std::tuple<Vector3d, Vector3d, Vector3d>,
 std::optional<std::tuple<Vector3d, Vector3d, Quaternion, double, double>>
 SystemManager::generateCommand(const std::tuple<Vector3d, Vector3d, Vector3d>& trajDest,
                               const std::vector<bool>& controlType, double current_ts, int counter,
-                              const Quaternion& quat_ned_bodyfrd) {
+                              const Quaternion& quat_ned_bodyfrd, bool log_data) {
     
     auto [command, rpyRate_cmd, quat_ned_desbodyfrd_cmd] = _controlMain->get_cmd(
         _currentData.pos_ned_m.ned, _currentData.pos_ned_m.vel_ned,
         _currentData.imu_ned.accel, _currentData.imu_ned.gyro,
         quat_ned_bodyfrd, _currentData.imu_ts, current_ts - _prev_ts, current_ts, counter,
         trajDest, _currentData, std::make_tuple(heading_dir_ned, Vector3d::Zero(), Vector3d::Zero()),
-        controlType, true, homingStage);
+        controlType, log_data, homingStage);
     
     if (_controlAux) {
         auto [commandAux, rpyRate_cmdAux, quat_ned_desbodyfrd_cmdAux] = _controlAux->get_cmd(
@@ -273,7 +314,7 @@ SystemManager::generateCommand(const std::tuple<Vector3d, Vector3d, Vector3d>& t
             _currentData.imu_ned.accel, _currentData.imu_ned.gyro,
             quat_ned_bodyfrd, _currentData.imu_ts, current_ts - _prev_ts, current_ts, counter,
             trajDest, _currentData, std::make_tuple(heading_dir_ned, Vector3d::Zero(), Vector3d::Zero()),
-            controlType, true, homingStage);
+            controlType, log_data, homingStage);
         
         Vector3d commandBody = commandAux;
         // Check controller type - would need to get from controller
@@ -726,8 +767,12 @@ void SystemManager::gatherData() {
                                
                 // Handle flight mode logic
                 if (_currentData.custom_mode_id != static_cast<int>(PX4_FLIGHT_STATE::OFFBOARD)) {
-                    // HOLD ON state or POSITION state
-                    _input_logger.reset();  // Set to nullptr
+                    // HOLD ON state or POSITION state - close loggers when leaving OFFBOARD mode
+                    if (_input_logger) {
+                        _input_logger->close();
+                        _input_logger.reset();
+                    }
+                    // Control loggers will be closed automatically when log_data=false is passed to get_cmd
                     double heading_rad = _currentData.heading;
                     yawDefinedDir_ned = Vector3d(std::cos(heading_rad), std::sin(heading_rad), 0);
                     holdonHeading = yawDefinedDir_ned;

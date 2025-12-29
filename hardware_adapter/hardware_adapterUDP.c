@@ -385,8 +385,30 @@ void hardware_adapter_parse(hardware_adapter_t* adapter, const char* msg_type, v
     if (strcmp(msg_type, "HEARTBEAT") == 0) {
         mavlink_heartbeat_t heartbeat;
         mavlink_msg_heartbeat_decode(msg, &heartbeat);
-        adapter->current_data.custom_mode_id = heartbeat.custom_mode;
-        adapter->current_data.gathered.custom_mode_id = true;
+        
+        // Ignore mode updates if custom_mode is 0 (invalid/uninitialized)
+        // Only update mode if we receive a valid non-zero mode value
+        if (heartbeat.custom_mode != 0) {
+            // Debug: Track mode changes
+            static int prev_custom_mode_id = -1;
+            static int mode_change_count = 0;
+            static double last_mode_debug_time = 0;
+            double current_time = adapter->current_data.local_ts;
+            
+            if (heartbeat.custom_mode != prev_custom_mode_id) {
+                mode_change_count++;
+                // Print mode change info (limit to avoid spam)
+                if (current_time - last_mode_debug_time > 1.0 || mode_change_count <= 5) {
+                    printf("hardware_adapter: Mode change #%d: %d -> %d (OFFBOARD=393216, HOLD=50593792)\n",
+                           mode_change_count, prev_custom_mode_id, heartbeat.custom_mode);
+                    last_mode_debug_time = current_time;
+                }
+                prev_custom_mode_id = heartbeat.custom_mode;
+            }
+            
+            adapter->current_data.custom_mode_id = heartbeat.custom_mode;
+            adapter->current_data.gathered.custom_mode_id = true;
+        }
         // Note: mode string would need to be converted from custom_mode_id
     }
     else if (strcmp(msg_type, "ATTITUDE_QUATERNION") == 0) {

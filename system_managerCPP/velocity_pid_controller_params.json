@@ -1,0 +1,14 @@
+{
+  "mass": 0.55,
+  "kX": [2.0, 2.0, 2.0],
+  "kV": [0.0, 0.0, 0.0],
+  "kIX": [0.0, 0.0, 0.0],
+  "kIV": [0.0, 0.0, 0.0],
+  "c1": 1.0,
+  "sat_sigmaX": 3.0,
+  "sat_sigmaV": 3.0,
+  "keYaw": 1.0,
+  "keYawRate": 0.01,
+  "keYawIntegral": 0.0,
+  "sat_sigmaYaw": 3.0
+}

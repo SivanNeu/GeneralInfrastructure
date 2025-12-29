@@ -1,8 +1,10 @@
 #include "VelocityPIDController.h"
 #include "general.h"
 #include "utils/FlightData.h"
+#include "utils/JsonFile.h"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 VelocityPIDControllerParameters::VelocityPIDControllerParameters(double mass) : mass(mass) {
     double commonFactor = 2.0;
@@ -19,10 +21,42 @@ VelocityPIDControllerParameters::VelocityPIDControllerParameters(double mass) : 
     sat_sigmaYaw = 3.0;
 }
 
+VelocityPIDControllerParameters VelocityPIDControllerParameters::loadFromJSON(const std::string& jsonFilePath) {
+    VelocityPIDControllerParameters params(0.5); // Default mass
+    
+    JsonFile json(jsonFilePath);
+    if (!json.isValid()) {
+        std::cerr << "Warning: Could not load controller parameter file: " << jsonFilePath << std::endl;
+        std::cerr << "  Using default parameters" << std::endl;
+        return params;
+    }
+    
+    // Load all parameters using JsonFile
+    params.mass = json.getDouble("mass", 0.5);
+    params.kX = json.getDiagonalMatrix3d("kX", Matrix3d::Zero());
+    params.kV = json.getDiagonalMatrix3d("kV", Matrix3d::Zero());
+    params.kIX = json.getDiagonalMatrix3d("kIX", Matrix3d::Zero());
+    params.kIV = json.getDiagonalMatrix3d("kIV", Matrix3d::Zero());
+    params.c1 = json.getDouble("c1", 1.0);
+    params.sat_sigmaX = json.getDouble("sat_sigmaX", 3.0);
+    params.sat_sigmaV = json.getDouble("sat_sigmaV", 3.0);
+    params.keYaw = json.getDouble("keYaw", 1.0);
+    params.keYawRate = json.getDouble("keYawRate", 0.01);
+    params.keYawIntegral = json.getDouble("keYawIntegral", 0.0);
+    params.sat_sigmaYaw = json.getDouble("sat_sigmaYaw", 3.0);
+    
+    std::cout << "Loaded PID controller parameters from: " << jsonFilePath << std::endl;
+    return params;
+}
+
 VelocityPIDController::VelocityPIDController(double mass, double currentTime, YAW_COMMAND_TYPE yawCommandType)
+    : VelocityPIDController(VelocityPIDControllerParameters(mass), currentTime, yawCommandType) {
+}
+
+VelocityPIDController::VelocityPIDController(const VelocityPIDControllerParameters& params, double currentTime, YAW_COMMAND_TYPE yawCommandType)
     : controllerName("VelocityPID"), controllerType(CONTROLLER_TYPE::VELOCITYPID),
       yawCommandType(yawCommandType), t0(currentTime), t(0.0), t_pre(0.0), dt(1e-9),
-      use_integralTerm(true), A(Vector3d::Zero()), param(mass),
+      use_integralTerm(true), A(Vector3d::Zero()), param(params),
       ex(Vector3d::Zero()), ev(Vector3d::Zero()),
       eYaw(0.0), prev_eYaw(std::nullopt), eYawRate(0.0), eYawIntegral(0.0),
       eYawRateFilter(0.2, true, LPF_TYPE::FIRST_ORDER), eDV(Vector3d::Zero()) {
