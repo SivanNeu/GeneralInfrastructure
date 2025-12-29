@@ -5,7 +5,7 @@
   "dronemass": 0.55,
   "heading_dir_ned": [-1.0, 1.0, 0.0],
   "desiredHeadingDir_ned": [-1.0, 1.0, 0.0],
-  "missionType": "WAYPOINT",
+  "missionType": "CIRCLE",
   "yawControlType": "DEFINED_DIR",
   "yawCommandFactor": 1.0,
   "maximalVelocity": 0.75,
@@ -14,7 +14,7 @@
   "originOffset_frd": [0.0, 0.0, 0.0],
   "terminalHomingAlowed": true,
   "circleRadius": 5.0,
-  "controllerType": "VELOCITYRL",
+  "controllerType": "VELOCITYPID",
   "yawCommandType": "RATE",
   "rateControlEnabled": false
 }

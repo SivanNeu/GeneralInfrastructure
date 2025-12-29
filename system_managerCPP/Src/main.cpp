@@ -213,8 +213,50 @@ ConfigParams parseConfigFile(const std::string& config_path) {
     return params;
 }
 
+void printHelp(const char* program_name) {
+    std::cout << "System Manager - Drone Control System" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Usage: " << program_name << " [OPTIONS] [config_file.json]" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Options:" << std::endl;
+    std::cout << "  -h, --help     Show this help message and exit" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Arguments:" << std::endl;
+    std::cout << "  config_file.json    Path to configuration file (JSON format)" << std::endl;
+    std::cout << "                      If not specified, searches for 'system_manager_config.json'" << std::endl;
+    std::cout << "                      in current directory or parent directory" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Configuration File:" << std::endl;
+    std::cout << "  The configuration file should be a JSON file containing the following fields:" << std::endl;
+    std::cout << "    - config_dir (string, required): Directory for configuration files" << std::endl;
+    std::cout << "    - log_dir (string, required): Directory for log files" << std::endl;
+    std::cout << "    - currentTime (double, optional): Current time, defaults to -1.0" << std::endl;
+    std::cout << "    - dronemass (double, optional): Drone mass in kg, defaults to 0.55" << std::endl;
+    std::cout << "    - heading_dir_ned (array[3], optional): Heading direction in NED frame" << std::endl;
+    std::cout << "    - desiredHeadingDir_ned (array[3], optional): Desired heading direction" << std::endl;
+    std::cout << "    - missionType (string, optional): Mission type (NONE, WAYPOINT, VELOCITY, etc.)" << std::endl;
+    std::cout << "    - yawControlType (string, optional): Yaw control type" << std::endl;
+    std::cout << "    - controllerType (string, optional): Controller type" << std::endl;
+    std::cout << "    - yawCommandType (string, optional): Yaw command type (NONE, ANGLE, RATE)" << std::endl;
+    std::cout << "    - And other optional parameters..." << std::endl;
+    std::cout << std::endl;
+    std::cout << "Examples:" << std::endl;
+    std::cout << "  " << program_name << " --help" << std::endl;
+    std::cout << "  " << program_name << " config.json" << std::endl;
+    std::cout << "  " << program_name << "  # Uses default config file search" << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     try {
+        // Check for help flag
+        if (argc > 1) {
+            std::string arg = argv[1];
+            if (arg == "--help" || arg == "-h") {
+                printHelp(argc > 0 ? argv[0] : "SystemManagerMain");
+                return 0;
+            }
+        }
+        
         // Parse command-line arguments
         std::string config_file = "system_manager_config.json";
         

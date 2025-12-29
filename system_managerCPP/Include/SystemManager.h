@@ -24,11 +24,16 @@
 #include <zmq.hpp>
 
 // ZMQ Topic constants (from zmqTopics.py)
+// Python: topicMavlinkPort = 7790, topicMavlinkFlightData = b'FLIGHT_DATA'
 constexpr int TOPIC_MAVLINK_PORT = 7790;
 constexpr const char* TOPIC_MAVLINK_FLIGHT_DATA = "FLIGHT_DATA";
+// Python: topicGuidenceCmdPort = 7793
 constexpr int TOPIC_GUIDANCE_CMD_PORT = 7793;
+// Python: topicGuidenceCmdVelNed = b'quadVelNedCmd'
 constexpr const char* TOPIC_GUIDANCE_CMD_VEL_NED = "quadVelNedCmd";
+// Python: topicGuidenceCmdAttitude = b'quadAttitudeCmd'
 constexpr const char* TOPIC_GUIDANCE_CMD_ATTITUDE = "quadAttitudeCmd";
+// Python: topicGuidenceCmdAcc = b'quadAccCmd'
 constexpr const char* TOPIC_GUIDANCE_CMD_ACC = "quadAccCmd";
 
 // Constants

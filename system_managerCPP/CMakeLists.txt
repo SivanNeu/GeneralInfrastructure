@@ -6,9 +6,9 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Build type - default to Release if not specified
+# Build type - default to Debug if not specified
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
 
 # Set possible build types
@@ -99,7 +99,7 @@ endif()
 
 # Build options
 option(USE_LIBTORCH "Build with LibTorch support for RLPolicyClean" ON)
-option(USE_SANITIZERS "Enable address and undefined behavior sanitizers in Debug mode" ON)
+option(USE_SANITIZERS "Enable address and undefined behavior sanitizers in Debug mode" OFF)
 option(LIBTORCH_PATH "Path to LibTorch installation" "/opt/libtorch")
 
 if(USE_LIBTORCH)
@@ -212,15 +212,27 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang"
     )
     
     # Sanitizers (optional, can be disabled for faster compilation)
+    # Note: Requires sanitizer runtime libraries (libasan, libubsan) to be installed
     if(USE_SANITIZERS)
-        target_compile_options(SystemManagerLib PRIVATE 
-            $<$<CONFIG:Debug>:-fsanitize=address>
-            $<$<CONFIG:Debug>:-fsanitize=undefined>
-        )
-        target_link_options(SystemManagerLib PRIVATE 
-            $<$<CONFIG:Debug>:-fsanitize=address>
-            $<$<CONFIG:Debug>:-fsanitize=undefined>
-        )
+        # Check if compiler supports sanitizers
+        include(CheckCXXCompilerFlag)
+        check_cxx_compiler_flag("-fsanitize=address" COMPILER_SUPPORTS_ASAN)
+        check_cxx_compiler_flag("-fsanitize=undefined" COMPILER_SUPPORTS_UBSAN)
+        
+        if(COMPILER_SUPPORTS_ASAN AND COMPILER_SUPPORTS_UBSAN)
+            target_compile_options(SystemManagerLib PRIVATE 
+                $<$<CONFIG:Debug>:-fsanitize=address>
+                $<$<CONFIG:Debug>:-fsanitize=undefined>
+            )
+            target_link_options(SystemManagerLib PRIVATE 
+                $<$<CONFIG:Debug>:-fsanitize=address>
+                $<$<CONFIG:Debug>:-fsanitize=undefined>
+            )
+            message(STATUS "Sanitizers enabled: AddressSanitizer and UndefinedBehaviorSanitizer")
+        else()
+            message(WARNING "Compiler does not support sanitizers. Disabling USE_SANITIZERS.")
+            set(USE_SANITIZERS OFF)
+        endif()
     endif()
 endif()
 
@@ -248,6 +260,18 @@ target_include_directories(SystemManagerMain
     ${INCLUDE_DIR}
     ${INCLUDE_UTILS_DIR}
 )
+
+# Apply sanitizers to executable as well (must match library for static linking)
+if(USE_SANITIZERS AND COMPILER_SUPPORTS_ASAN AND COMPILER_SUPPORTS_UBSAN)
+    target_compile_options(SystemManagerMain PRIVATE 
+        $<$<CONFIG:Debug>:-fsanitize=address>
+        $<$<CONFIG:Debug>:-fsanitize=undefined>
+    )
+    target_link_options(SystemManagerMain PRIVATE 
+        $<$<CONFIG:Debug>:-fsanitize=address>
+        $<$<CONFIG:Debug>:-fsanitize=undefined>
+    )
+endif()
 # target_link_libraries(SystemManagerMain SystemManagerLib)
 
 # Installation (optional)

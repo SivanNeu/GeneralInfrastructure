@@ -26,8 +26,8 @@ UDP_EXAMPLE_OBJ = $(OBJ_DIR)/udp_example.o
 UDP_EXAMPLE_OBJ_DEBUG = $(OBJ_DIR_DEBUG)/udp_example.o
 
 # Target executables
-TARGET = $(BIN_DIR)/hardware_adapter
-TARGET_DEBUG = $(BIN_DIR)/hardware_adapter_debug
+TARGET = $(BIN_DIR)/hardware_adapterUDP
+TARGET_DEBUG = $(BIN_DIR)/hardware_adapterUDP
 UDP_EXAMPLE_TARGET = $(BIN_DIR)/udp_example
 UDP_EXAMPLE_TARGET_DEBUG = $(BIN_DIR)/udp_example_debug
 

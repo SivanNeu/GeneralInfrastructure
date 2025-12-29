@@ -64,17 +64,21 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
         _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
     }
     
-    // Setup ZMQ subscriber
+    // Setup ZMQ subscriber (matches zmqWrapper.py subscribe() function)
+    // Python: zmqSub.setsockopt(zmq.CONFLATE, 1)
     subsSock.set(zmq::sockopt::conflate, 1);
     subsSock.set(zmq::sockopt::rcvtimeo, 100);
+    // Python: zmqSub.connect("tcp://127.0.0.1:%d" % port)
     std::string sub_addr = "tcp://127.0.0.1:" + std::to_string(TOPIC_MAVLINK_PORT);
     subsSock.connect(sub_addr);
+    // Python: zmqSub.setsockopt(zmq.SUBSCRIBE, topic) where topic = b'FLIGHT_DATA'
     subsSock.set(zmq::sockopt::subscribe, TOPIC_MAVLINK_FLIGHT_DATA);
     std::cout << "System_Manager: Subscribed to topic: " << TOPIC_MAVLINK_FLIGHT_DATA 
               << " on port: " << TOPIC_MAVLINK_PORT << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     
-    // Setup ZMQ publisher
+    // Setup ZMQ publisher (matches zmqWrapper.py publisher() function)
+    // Python: zmqPub.bind("tcp://*:%d" % port)
     std::string pub_addr = "tcp://*:" + std::to_string(TOPIC_GUIDANCE_CMD_PORT);
     pubSock.bind(pub_addr);
     std::cout << "System_Manager: Publishing commands on port: " << TOPIC_GUIDANCE_CMD_PORT << std::endl;
@@ -416,6 +420,224 @@ std::vector<uint8_t> SystemManager::_serialize_vel_cmd(const Vector3d& vel_cmd, 
     return result;
 }
 
+Flight_Data SystemManager::_deserialize_flight_data(const std::vector<uint8_t>& data_bytes) {
+    Flight_Data data;
+    
+    // Check minimum size
+    if (data_bytes.size() < 8) {
+        throw std::runtime_error("Data too short for deserialization");
+    }
+    
+    size_t offset = 0;
+    
+    // Read magic and version (8 bytes)
+    uint32_t magic, version;
+    std::memcpy(&magic, data_bytes.data() + offset, 4);
+    offset += 4;
+    std::memcpy(&version, data_bytes.data() + offset, 4);
+    offset += 4;
+    
+    // Validate magic number (0x464C4947 = "FLIG")
+    if (magic != 0x464C4947) {
+        throw std::runtime_error("Invalid magic number: " + std::to_string(magic));
+    }
+    if (version != 1) {
+        throw std::runtime_error("Unsupported version: " + std::to_string(version));
+    }
+    
+    // Read message_count (4 bytes, uint32_t)
+    uint32_t message_count_u32;
+    std::memcpy(&message_count_u32, data_bytes.data() + offset, 4);
+    data.message_count = static_cast<int>(message_count_u32);
+    offset += 4;
+    
+    // Read 63 doubles (504 bytes)
+    if (data_bytes.size() < offset + 504) {
+        throw std::runtime_error("Data too short for doubles section");
+    }
+    
+    double doubles[63];
+    std::memcpy(doubles, data_bytes.data() + offset, 504);
+    offset += 504;
+    
+    int idx = 0;
+    
+    // Scalar doubles (19 total)
+    data.quat_ts = static_cast<int64_t>(doubles[idx++]);
+    data.imu_ts = static_cast<int64_t>(doubles[idx++]);
+    data.timestamp = static_cast<int64_t>(doubles[idx++]);
+    data.local_ts = static_cast<int64_t>(doubles[idx++]);
+    data.temperature = doubles[idx++];
+    data.amsl_m = doubles[idx++];
+    data.local_m = doubles[idx++];
+    data.monotonic_m = doubles[idx++];
+    data.relative_m = doubles[idx++];
+    data.terrain_m = doubles[idx++];
+    data.bottom_clearance_m = doubles[idx++];
+    data.pressure = doubles[idx++];
+    data.absolute_press_hpa = doubles[idx++];
+    data.differential_press_hpa = doubles[idx++];
+    data.signal_strength_percent = doubles[idx++];
+    data.throttle = doubles[idx++];
+    data.heading = doubles[idx++];
+    data.groundspeed = doubles[idx++];
+    data.current_thrust = doubles[idx++];
+    
+    // Quaternion (5 doubles: x, y, z, w, timestamp)
+    data.quat_ned_bodyfrd.x = doubles[idx++];
+    data.quat_ned_bodyfrd.y = doubles[idx++];
+    data.quat_ned_bodyfrd.z = doubles[idx++];
+    data.quat_ned_bodyfrd.w = doubles[idx++];
+    data.quat_ned_bodyfrd.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // Altitude (4 doubles: amsl, relative, vertical_speed_estimate, timestamp)
+    data.altitude_m.amsl = doubles[idx++];
+    data.altitude_m.relative = doubles[idx++];
+    data.altitude_m.vertical_speed_estimate = doubles[idx++];
+    data.altitude_m.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // IMU raw FRD (7 doubles: accel[3], gyro[3], timestamp)
+    data.imu_raw_frd.accel[0] = doubles[idx++];
+    data.imu_raw_frd.accel[1] = doubles[idx++];
+    data.imu_raw_frd.accel[2] = doubles[idx++];
+    data.imu_raw_frd.gyro[0] = doubles[idx++];
+    data.imu_raw_frd.gyro[1] = doubles[idx++];
+    data.imu_raw_frd.gyro[2] = doubles[idx++];
+    data.imu_raw_frd.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // IMU NED (7 doubles: accel[3], gyro[3], timestamp)
+    data.imu_ned.accel[0] = doubles[idx++];
+    data.imu_ned.accel[1] = doubles[idx++];
+    data.imu_ned.accel[2] = doubles[idx++];
+    data.imu_ned.gyro[0] = doubles[idx++];
+    data.imu_ned.gyro[1] = doubles[idx++];
+    data.imu_ned.gyro[2] = doubles[idx++];
+    data.imu_ned.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // Position NED (7 doubles: ned[3], vel_ned[3], timestamp)
+    data.pos_ned_m.ned[0] = doubles[idx++];
+    data.pos_ned_m.ned[1] = doubles[idx++];
+    data.pos_ned_m.ned[2] = doubles[idx++];
+    data.pos_ned_m.vel_ned[0] = doubles[idx++];
+    data.pos_ned_m.vel_ned[1] = doubles[idx++];
+    data.pos_ned_m.vel_ned[2] = doubles[idx++];
+    data.pos_ned_m.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // Raw position LLA (4 doubles: lla[3], timestamp)
+    data.raw_pos_lla_deg.lla[0] = doubles[idx++];
+    data.raw_pos_lla_deg.lla[1] = doubles[idx++];
+    data.raw_pos_lla_deg.lla[2] = doubles[idx++];
+    data.raw_pos_lla_deg.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // Filtered position LLA (4 doubles: lla[3], timestamp)
+    data.filt_pos_lla_deg.lla[0] = doubles[idx++];
+    data.filt_pos_lla_deg.lla[1] = doubles[idx++];
+    data.filt_pos_lla_deg.lla[2] = doubles[idx++];
+    data.filt_pos_lla_deg.timestamp = static_cast<int64_t>(doubles[idx++]);
+    
+    // RPY rates and RPY (6 doubles: rpy_rates[3], rpy[3])
+    data.rpy_rates[0] = doubles[idx++];
+    data.rpy_rates[1] = doubles[idx++];
+    data.rpy_rates[2] = doubles[idx++];
+    data.rpy[0] = doubles[idx++];
+    data.rpy[1] = doubles[idx++];
+    data.rpy[2] = doubles[idx++];
+    
+    // Read uint32_t fields
+    if (data_bytes.size() < offset + 4) {
+        throw std::runtime_error("Data too short for custom_mode_id");
+    }
+    uint32_t custom_mode_id_u32;
+    std::memcpy(&custom_mode_id_u32, data_bytes.data() + offset, 4);
+    data.custom_mode_id = static_cast<int>(custom_mode_id_u32);
+    offset += 4;
+    
+    if (data_bytes.size() < offset + 4) {
+        throw std::runtime_error("Data too short for mode");
+    }
+    uint32_t mode_val;
+    std::memcpy(&mode_val, data_bytes.data() + offset, 4);
+    data.mode = static_cast<FLIGHT_MODE>(mode_val);
+    offset += 4;
+    
+    // Read bools (packed as uint8_t)
+    if (data_bytes.size() < offset + 1) {
+        throw std::runtime_error("Data too short for bools");
+    }
+    uint8_t bools = data_bytes[offset++];
+    data.is_armed = (bools & 1) != 0;
+    data.offboardMode = (bools & 2) != 0;
+    data.is_available = (bools & 4) != 0;
+    data.was_available_once = (bools & 8) != 0;
+    data.is_gyrometer_calibration_ok = (bools & 16) != 0;
+    data.is_accelerometer_calibration_ok = (bools & 32) != 0;
+    data.is_magnetometer_calibration_ok = (bools & 64) != 0;
+    data.in_air = (bools & 128) != 0;
+    
+    // Read gathered flags (uint32_t bitfield)
+    if (data_bytes.size() < offset + 4) {
+        throw std::runtime_error("Data too short for gathered flags");
+    }
+    uint32_t gathered_flags;
+    std::memcpy(&gathered_flags, data_bytes.data() + offset, 4);
+    offset += 4;
+    
+    // Debug: Log gathered flags (first few times)
+    static int gather_debug_count = 0;
+    if (gather_debug_count < 3) {
+        std::cout << "System_Manager: Raw gathered_flags value: 0x" << std::hex << gathered_flags 
+                  << std::dec << " (" << gathered_flags << ")" << std::endl;
+        std::cout << "System_Manager: Offset when reading gathered_flags: " << (offset - 4) 
+                  << ", total data size: " << data_bytes.size() << std::endl;
+        gather_debug_count++;
+    }
+    
+    // Set gathered flags (only those that exist in C++ struct)
+    // First, use the flags from the binary data
+    data.gathered.euler_ned_bodyfrd = (gathered_flags & 1) != 0;
+    data.gathered.quat_ned_bodyfrd = (gathered_flags & 2) != 0;
+    data.gathered.pos_ned_m = (gathered_flags & 4) != 0;
+    data.gathered.imu_ned = (gathered_flags & 16) != 0;
+    data.gathered.tracker_px = (gathered_flags & 32) != 0;
+    
+    // If flags are 0 but we have valid-looking data, set flags based on data validity
+    // This handles the case where hardware_adapter hasn't set flags yet but has data
+    if (gathered_flags == 0) {
+        // Check if quaternion is valid (not all zeros, w should be close to 1 for identity)
+        if (data.quat_ned_bodyfrd.w != 0.0 || data.quat_ned_bodyfrd.x != 0.0 || 
+            data.quat_ned_bodyfrd.y != 0.0 || data.quat_ned_bodyfrd.z != 0.0) {
+            data.gathered.quat_ned_bodyfrd = true;
+        }
+        
+        // For position and IMU, be more lenient - if we got a message, assume data is valid
+        // Even if values are zero (e.g., at origin or stationary), the data structure is valid
+        // Check if timestamp is non-zero as a sign that data was actually received
+        if (data.pos_ned_m.timestamp != 0 || data.timestamp != 0) {
+            data.gathered.pos_ned_m = true;
+        }
+        
+        // Check if IMU timestamp is non-zero
+        if (data.imu_ned.timestamp != 0 || data.imu_ts != 0) {
+            data.gathered.imu_ned = true;
+        }
+        
+        // Debug: Log when we're inferring flags from data
+        static int inferred_flags_count = 0;
+        if (inferred_flags_count < 3) {
+            std::cout << "System_Manager: Inferred gathered flags from data validity. "
+                      << "quat=" << data.gathered.quat_ned_bodyfrd
+                      << ", pos=" << data.gathered.pos_ned_m
+                      << " (pos_ts=" << data.pos_ned_m.timestamp << ", ts=" << data.timestamp << ")"
+                      << ", imu=" << data.gathered.imu_ned
+                      << " (imu_ts=" << data.imu_ned.timestamp << ", imu_ts=" << data.imu_ts << ")"
+                      << std::endl;
+            inferred_flags_count++;
+        }
+    }
+    
+    return data;
+}
+
 void SystemManager::gatherData() {
     // Use the persistent socket created in __init__
     // With CONFLATE enabled, we only get the latest message
@@ -460,31 +682,48 @@ void SystemManager::gatherData() {
     // Process the received message if we got one
     if (received) {
         try {
-            // Check if message starts with topic prefix
+            // Check if message starts with topic prefix (matches Python: ret.startswith(zmqTopics.topicMavlinkFlightData))
             std::string topic_prefix(TOPIC_MAVLINK_FLIGHT_DATA);
             std::string msg_str(static_cast<const char*>(message.data()), message.size());
             
+            // Debug: Log message info occasionally
+            static int msg_count = 0;
+            static double last_debug_time = 0;
+            double now = TimeUtils::now();
+            if (now - last_debug_time > 5.0) {
+                std::cout << "System_Manager: Received message, size: " << message.size() 
+                          << " bytes, starts with: " << (msg_str.size() > 0 ? std::string(1, msg_str[0]) : "empty")
+                          << ", topic prefix: " << topic_prefix << std::endl;
+                last_debug_time = now;
+            }
+            
             if (msg_str.find(topic_prefix) == 0) {
-                // Strip topic prefix before deserializing
+                // Strip topic prefix before deserializing (matches Python: data_bytes = ret[len(zmqTopics.topicMavlinkFlightData):])
                 std::vector<uint8_t> data_bytes(
                     static_cast<const uint8_t*>(message.data()) + topic_prefix.size(),
                     static_cast<const uint8_t*>(message.data()) + message.size()
                 );
                 
-                // Note: _deserialize_flight_data needs to be implemented separately
-                // For now, create a placeholder Flight_Data
-                // TODO: Implement _deserialize_flight_data based on Python pickle format
-                Flight_Data data;
-                // data = _deserialize_flight_data(data_bytes);  // Uncomment when implemented
+                // Debug: Log deserialization attempt
+                if (msg_count < 3) {
+                    std::cout << "System_Manager: Attempting to deserialize " << data_bytes.size() 
+                              << " bytes of flight data" << std::endl;
+                    // Check magic number
+                    if (data_bytes.size() >= 4) {
+                        uint32_t magic_check = 0;
+                        std::memcpy(&magic_check, data_bytes.data(), 4);
+                        std::cout << "System_Manager: Magic number: 0x" << std::hex << magic_check 
+                                  << std::dec << " (expected: 0x464C4947)" << std::endl;
+                    }
+                    msg_count++;
+                }
+                
+                // Deserialize flight data
+                Flight_Data data = _deserialize_flight_data(data_bytes);
                 
                 double curTime = TimeUtils::now();
                 _currentData = data;
-                
-                // Set gathered flags to indicate we have received data
-                _currentData.gathered.quat_ned_bodyfrd = true;
-                _currentData.gathered.pos_ned_m = true;
-                _currentData.gathered.imu_ned = true;
-                
+                               
                 // Handle flight mode logic
                 if (_currentData.custom_mode_id != static_cast<int>(PX4_FLIGHT_STATE::OFFBOARD)) {
                     // HOLD ON state or POSITION state
@@ -526,13 +765,30 @@ void SystemManager::gatherData() {
                 }
             } else {
                 // Unexpected message format
-                std::cout << "Warning: Received message without expected topic prefix" << std::endl;
+                double now = TimeUtils::now();
+                static double last_warn_time = 0;
+                if (now - last_warn_time > 5.0) {
+                    std::cout << "System_Manager: Warning - Received message without expected topic prefix. "
+                              << "Message size: " << message.size() << " bytes, "
+                              << "First 20 chars: ";
+                    size_t preview_len = std::min(message.size(), size_t(20));
+                    for (size_t i = 0; i < preview_len; i++) {
+                        char c = msg_str[i];
+                        if (c >= 32 && c < 127) {
+                            std::cout << c;
+                        } else {
+                            std::cout << "\\x" << std::hex << (unsigned char)c << std::dec;
+                        }
+                    }
+                    std::cout << std::endl;
+                    last_warn_time = now;
+                }
                 return;
             }
         } catch (const std::exception& e) {
             double now = TimeUtils::now();
             if (now - _last_gather_error_time > 5.0) {
-                std::cerr << "Error processing flight data in gatherData: " << e.what() << std::endl;
+                std::cerr << "System_Manager: Error processing flight data in gatherData: " << e.what() << std::endl;
                 _last_gather_error_time = now;
             }
         }
@@ -540,8 +796,10 @@ void SystemManager::gatherData() {
         // No message received - warn occasionally
         double now = TimeUtils::now();
         if (now - _last_no_data_warning_time > 5.0) {
-            std::cout << "System_manager: WARNING - No flight data received for 5s. Is hardware_adapter running and publishing on port " 
-                      << TOPIC_MAVLINK_PORT << "?" << std::endl;
+            std::cout << "System_Manager: WARNING - No flight data received for 5s. "
+                      << "Is hardware_adapter running and publishing on port " 
+                      << TOPIC_MAVLINK_PORT << "? "
+                      << "Subscribed to topic: " << TOPIC_MAVLINK_FLIGHT_DATA << std::endl;
             _last_no_data_warning_time = now;
         }
     }

@@ -1,5 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
 #include "hardware_adapter.h"
 #include "zmq_topics.h"
 #include <stdio.h>
@@ -17,8 +16,6 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/errno.h>
-#include <termios.h>
-#include <sys/ioctl.h>
 
 // MAVLink includes - adjust path based on your MAVLink installation
 // If MAVLink is installed system-wide, use:
@@ -35,33 +32,18 @@
 #define MAV_COMP_ID_ONBOARD_COMPUTER 191
 #endif
 
-// Connection type enum
-typedef enum {
-    MAVLINK_CONNECTION_UDP,
-    MAVLINK_CONNECTION_SERIAL
-} mavlink_connection_type_t;
-
 // MAVLink connection structure
 typedef struct {
-    mavlink_connection_type_t type;  // Connection type (UDP or SERIAL)
-    int fd;  // File descriptor (UDP socket or serial port)
-    
-    // UDP-specific fields
+    int fd;  // UDP socket file descriptor
     struct sockaddr_in remote_addr;
     struct sockaddr_in local_addr;
-    bool socket_connected;  // UDP socket connected state
-    
-    // Serial-specific fields
-    char* serial_device;  // Serial device path (e.g., "/dev/ttyS0")
-    int baudrate;  // Serial baudrate
-    
-    // Common fields
     uint8_t target_system;
     uint8_t target_component;
     uint8_t system_id;
     uint8_t component_id;
     mavlink_status_t status;
     bool connected;  // MAVLink connection status (heartbeat received)
+    bool socket_connected;  // UDP socket connected state
 } mavlink_connection_t;
 
 // Forward declarations
@@ -79,12 +61,6 @@ static int mavlink_send_command_long(void* conn, uint16_t command, float param1,
                                      float param4, float param5, float param6, float param7);
 static int mavlink_wait_heartbeat(void* conn, int timeout_ms);
 static const char* mavlink_get_message_name_by_id(uint32_t msgid);
-
-// Serial port helper functions
-static int serial_open_port(const char* device);
-static bool serial_setup_port(int fd, int baudrate);
-static ssize_t serial_read_port(int fd, uint8_t* buffer, size_t buffer_size);
-static ssize_t serial_write_port(int fd, const uint8_t* buffer, size_t buffer_size);
 
 // Serialization helper (simplified - in production use proper serialization like msgpack or protobuf)
 static size_t flight_data_serialize(const flight_data_t* fd, void* buffer, size_t buffer_size);
@@ -140,17 +116,15 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
     zmq_wrapper_init();
     
     // Initialize mavlink
-    // Use the address provided by the caller (from command line or default)
-    // If not set, default to serial port
+    // Use server mode (udp:14540) to listen on port 14540, matching the working UDP example
+    // This allows receiving messages from the MAVLink server which sends to port 14540
+    adapter->mavlink_address = strdup("udp:14540");
     if (adapter->mavlink_address == NULL) {
-        adapter->mavlink_address = strdup("serial:///dev/ttyS0:57600");
-        if (adapter->mavlink_address == NULL) {
-            fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
-            pthread_mutex_destroy(&adapter->data_lock);
-            free(adapter->log_dir);
-            adapter->log_dir = NULL;
-            return -1;
-        }
+        fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
+        pthread_mutex_destroy(&adapter->data_lock);
+        free(adapter->log_dir);
+        adapter->log_dir = NULL;
+        return -1;
     }
     if (hardware_adapter_init_mavlink(adapter) != 0) {
         fprintf(stderr, "Failed to initialize mavlink connection\n");
@@ -411,8 +385,6 @@ void hardware_adapter_parse(hardware_adapter_t* adapter, const char* msg_type, v
     if (strcmp(msg_type, "HEARTBEAT") == 0) {
         mavlink_heartbeat_t heartbeat;
         mavlink_msg_heartbeat_decode(msg, &heartbeat);
-        // printf("Heartbeat: custom_mode: %u\n", (unsigned int)heartbeat.custom_mode);
-        // Always update custom_mode_id to reflect current mode (even if 0)
         adapter->current_data.custom_mode_id = heartbeat.custom_mode;
         adapter->current_data.gathered.custom_mode_id = true;
         // Note: mode string would need to be converted from custom_mode_id
@@ -867,208 +839,66 @@ void* hardware_adapter_data_thread_func(void* arg) {
     return NULL;
 }
 
-// Serial port helper functions
-static int serial_open_port(const char* device) {
-    // Open serial port
-    // O_RDWR - Read and write
-    // O_NOCTTY - Ignore special chars like CTRL-C
-    // O_NDELAY - Non-blocking mode
-    int fd = open(device, O_RDWR | O_NOCTTY | O_NDELAY);
-    
-    if (fd == -1) {
-        fprintf(stderr, "Failed to open serial port %s: %s\n", device, strerror(errno));
-        return -1;
-    }
-    
-    // Clear O_NDELAY to make blocking
-    fcntl(fd, F_SETFL, 0);
-    
-    return fd;
-}
-
-static bool serial_setup_port(int fd, int baudrate) {
-    // Check file descriptor
-    if (!isatty(fd)) {
-        fprintf(stderr, "ERROR: file descriptor %d is NOT a serial port\n", fd);
-        return false;
-    }
-    
-    // Read file descriptor configuration
-    struct termios config;
-    if (tcgetattr(fd, &config) < 0) {
-        fprintf(stderr, "ERROR: could not read configuration of fd %d\n", fd);
-        return false;
-    }
-    
-    // Input flags - Turn off input processing
-    config.c_iflag &= ~(IGNBRK | BRKINT | ICRNL | INLCR | PARMRK | INPCK | ISTRIP | IXON);
-    
-    // Output flags - Turn off output processing
-    config.c_oflag &= ~(OCRNL | ONLCR | ONLRET | ONOCR | OFILL | OPOST);
-    
-    // No line processing
-    config.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
-    
-    // Turn off character processing
-    config.c_cflag &= ~(CSIZE | PARENB);
-    config.c_cflag |= CS8;
-    
-    // One input byte is enough to return from read()
-    config.c_cc[VMIN] = 1;
-    config.c_cc[VTIME] = 10;  // 1 second timeout
-    
-    // Apply baudrate
-    speed_t speed;
-    switch (baudrate) {
-        case 1200: speed = B1200; break;
-        case 1800: speed = B1800; break;
-        case 9600: speed = B9600; break;
-        case 19200: speed = B19200; break;
-        case 38400: speed = B38400; break;
-        case 57600: speed = B57600; break;
-        case 115200: speed = B115200; break;
-        case 460800: speed = B460800; break;
-        case 921600: speed = B921600; break;
-        default:
-            fprintf(stderr, "ERROR: Desired baud rate %d could not be set\n", baudrate);
-            return false;
-    }
-    
-    if (cfsetispeed(&config, speed) < 0 || cfsetospeed(&config, speed) < 0) {
-        fprintf(stderr, "ERROR: Could not set desired baud rate of %d Baud\n", baudrate);
-        return false;
-    }
-    
-    // Finally, apply the configuration
-    if (tcsetattr(fd, TCSAFLUSH, &config) < 0) {
-        fprintf(stderr, "ERROR: could not set configuration of fd %d\n", fd);
-        return false;
-    }
-    
-    return true;
-}
-
-static ssize_t serial_read_port(int fd, uint8_t* buffer, size_t buffer_size) {
-    return read(fd, buffer, buffer_size);
-}
-
-static ssize_t serial_write_port(int fd, const uint8_t* buffer, size_t buffer_size) {
-    ssize_t bytes_written = write(fd, buffer, buffer_size);
-    if (bytes_written > 0) {
-        // Wait until all data has been written
-        tcdrain(fd);
-    }
-    return bytes_written;
-}
-
-// Parse MAVLink address string
-// Formats:
-//   - UDP: "udp:IP:PORT" or "udp:PORT" (server mode)
-//   - Serial: "serial:///dev/ttyS0:921600" or "serial:///dev/ttyS0:57600"
+// Parse MAVLink address string (format: "udp:IP:PORT" or "udp:PORT")
 // Returns: 0 on success, -1 on error
-// For UDP: sets ip, port, is_server_mode
-// For Serial: sets device, baudrate
-static int parse_mavlink_address(const char* address, 
-                                  char* ip, size_t ip_size, int* port, bool* is_server_mode,
-                                  char* device, size_t device_size, int* baudrate, mavlink_connection_type_t* conn_type) {
-    if (address == NULL || conn_type == NULL) {
+// Sets is_server_mode: true if just port (listen mode), false if IP:PORT (client mode)
+static int parse_mavlink_address(const char* address, char* ip, size_t ip_size, int* port, bool* is_server_mode) {
+    if (address == NULL || ip == NULL || port == NULL || is_server_mode == NULL) {
         return -1;
     }
     
-    // Check if it's a serial connection
-    if (strncmp(address, "serial://", 9) == 0) {
-        *conn_type = MAVLINK_CONNECTION_SERIAL;
-        
-        if (device == NULL || device_size == 0 || baudrate == NULL) {
-            return -1;
-        }
-        
-        const char* serial_part = address + 9;  // Skip "serial://"
-        char* colon = strchr(serial_part, ':');
-        if (colon == NULL) {
-            fprintf(stderr, "Invalid serial format, expected 'serial://device:baudrate'\n");
-            return -1;
-        }
-        
-        size_t device_len = colon - serial_part;
-        if (device_len >= device_size) {
-            fprintf(stderr, "Serial device path too long\n");
-            return -1;
-        }
-        strncpy(device, serial_part, device_len);
-        device[device_len] = '\0';
-        
-        *baudrate = atoi(colon + 1);
-        if (*baudrate <= 0) {
-            fprintf(stderr, "Invalid baudrate: %s\n", colon + 1);
-            return -1;
-        }
-        
-        return 0;
+    // Default values
+    strncpy(ip, "127.0.0.1", ip_size);
+    *port = 14540;
+    *is_server_mode = false;
+    
+    // Check if it starts with "udp:"
+    if (strncmp(address, "udp:", 4) != 0) {
+        fprintf(stderr, "Invalid MAVLink address format, expected 'udp:IP:PORT' or 'udp:PORT'\n");
+        return -1;
     }
     
-    // Check if it's a UDP connection
-    if (strncmp(address, "udp:", 4) == 0) {
-        *conn_type = MAVLINK_CONNECTION_UDP;
-        
-        if (ip == NULL || port == NULL || is_server_mode == NULL) {
+    const char* addr_part = address + 4;  // Skip "udp:"
+    
+    // Check if it's just a port number (e.g., "udp:14540")
+    char* colon = strchr(addr_part, ':');
+    if (colon == NULL) {
+        // No colon, assume it's just a port - server mode (listen on this port)
+        *port = atoi(addr_part);
+        if (*port <= 0 || *port > 65535) {
+            fprintf(stderr, "Invalid port number: %s\n", addr_part);
             return -1;
         }
+        *is_server_mode = true;
+    } else {
+        // Has colon, parse IP and port - client mode (connect to this address)
+        size_t ip_len = colon - addr_part;
+        if (ip_len >= ip_size) {
+            fprintf(stderr, "IP address too long\n");
+            return -1;
+        }
+        strncpy(ip, addr_part, ip_len);
+        ip[ip_len] = '\0';
         
-        // Default values
-        strncpy(ip, "127.0.0.1", ip_size);
-        *port = 14540;
+        const char* port_str = colon + 1;
+        *port = atoi(port_str);
+        if (*port <= 0 || *port > 65535) {
+            fprintf(stderr, "Invalid port number: %s\n", port_str);
+            return -1;
+        }
         *is_server_mode = false;
-        
-        const char* addr_part = address + 4;  // Skip "udp:"
-        
-        // Check if it's just a port number (e.g., "udp:14540")
-        char* colon = strchr(addr_part, ':');
-        if (colon == NULL) {
-            // No colon, assume it's just a port - server mode (listen on this port)
-            *port = atoi(addr_part);
-            if (*port <= 0 || *port > 65535) {
-                fprintf(stderr, "Invalid port number: %s\n", addr_part);
-                return -1;
-            }
-            *is_server_mode = true;
-        } else {
-            // Has colon, parse IP and port - client mode (connect to this address)
-            size_t ip_len = colon - addr_part;
-            if (ip_len >= ip_size) {
-                fprintf(stderr, "IP address too long\n");
-                return -1;
-            }
-            strncpy(ip, addr_part, ip_len);
-            ip[ip_len] = '\0';
-            
-            const char* port_str = colon + 1;
-            *port = atoi(port_str);
-            if (*port <= 0 || *port > 65535) {
-                fprintf(stderr, "Invalid port number: %s\n", port_str);
-                return -1;
-            }
-            *is_server_mode = false;
-        }
-        
-        return 0;
     }
     
-    fprintf(stderr, "Invalid MAVLink address format, expected 'udp:...' or 'serial://...'\n");
-    return -1;
+    return 0;
 }
 
-// Create UDP socket or serial port and connect to MAVLink endpoint
+// Create UDP socket and connect to MAVLink endpoint
 static void* mavlink_connect(const char* address) {
     char ip[64];
     int port;
     bool is_server_mode;
-    char device[256];
-    int baudrate;
-    mavlink_connection_type_t conn_type;
     
-    if (parse_mavlink_address(address, ip, sizeof(ip), &port, &is_server_mode,
-                              device, sizeof(device), &baudrate, &conn_type) != 0) {
+    if (parse_mavlink_address(address, ip, sizeof(ip), &port, &is_server_mode) != 0) {
         fprintf(stderr, "Failed to parse MAVLink address: %s\n", address);
         return NULL;
     }
@@ -1079,129 +909,88 @@ static void* mavlink_connect(const char* address) {
         return NULL;
     }
     
-    conn->type = conn_type;
-    
-    if (conn_type == MAVLINK_CONNECTION_SERIAL) {
-        // Serial port connection
-        conn->serial_device = strdup(device);
-        if (conn->serial_device == NULL) {
-            fprintf(stderr, "Failed to allocate memory for serial device\n");
-            free(conn);
-            return NULL;
-        }
-        conn->baudrate = baudrate;
-        
-        // Open serial port
-        conn->fd = serial_open_port(device);
-        if (conn->fd < 0) {
-            free(conn->serial_device);
-            free(conn);
-            return NULL;
-        }
-        
-        // Setup serial port
-        if (!serial_setup_port(conn->fd, baudrate)) {
-            fprintf(stderr, "Failed to setup serial port\n");
-            close(conn->fd);
-            free(conn->serial_device);
-            free(conn);
-            return NULL;
-        }
-        
-        printf("MAVLink serial connection: %s at %d baud, 8 data bits, no parity, 1 stop bit (8N1)\n", 
-               device, baudrate);
-        
-    } else {
-        // UDP connection
-        // Create UDP socket
-        conn->fd = socket(AF_INET, SOCK_DGRAM, 0);
-        if (conn->fd < 0) {
-            fprintf(stderr, "Failed to create UDP socket: %s\n", strerror(errno));
-            free(conn);
-            return NULL;
-        }
-        
-        // Enable SO_REUSEADDR to allow binding even if port is in use
-        int reuse = 1;
-        if (setsockopt(conn->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-            fprintf(stderr, "Warning: Failed to set SO_REUSEADDR: %s\n", strerror(errno));
-        }
-        
-        // Set socket to non-blocking
-        int flags = fcntl(conn->fd, F_GETFL, 0);
-        if (flags < 0 || fcntl(conn->fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-            fprintf(stderr, "Failed to set socket to non-blocking: %s\n", strerror(errno));
-            close(conn->fd);
-            free(conn);
-            return NULL;
-        }
-        
-        // Set receive timeout (like UDP example does)
-        // This prevents being stuck in recvfrom for too long
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 100000;  // 100ms timeout
-        if (setsockopt(conn->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-            fprintf(stderr, "Warning: Failed to set SO_RCVTIMEO: %s\n", strerror(errno));
-        }
-        
-        // Set up local address
-        // For UDP client mode (udp:IP:PORT): bind to any available port (server will respond to source port)
-        // For UDP server mode (udp:PORT): bind to the specified port to listen (like UDP example)
-        memset(&conn->local_addr, 0, sizeof(conn->local_addr));
-        conn->local_addr.sin_family = AF_INET;
-        conn->local_addr.sin_addr.s_addr = INADDR_ANY;
-        if (is_server_mode) {
-            conn->local_addr.sin_port = htons(port);  // Bind to specified port (server mode)
-            printf("MAVLink server mode: listening on port %d\n", port);
-        } else {
-            conn->local_addr.sin_port = 0;  // Let system choose port (client mode)
-        }
-        
-        // Set up remote address (where we send messages)
-        // For server mode, remote address will be set from first received message
-        // For client mode, set it to the specified IP:PORT
-        memset(&conn->remote_addr, 0, sizeof(conn->remote_addr));
-        if (!is_server_mode) {
-            conn->remote_addr.sin_family = AF_INET;
-            conn->remote_addr.sin_port = htons(port);
-            if (inet_pton(AF_INET, ip, &conn->remote_addr.sin_addr) != 1) {
-                fprintf(stderr, "Invalid IP address: %s\n", ip);
-                close(conn->fd);
-                free(conn);
-                return NULL;
-            }
-        } else {
-            // Server mode: remote address will be set from first received message
-            conn->remote_addr.sin_family = AF_INET;
-            conn->remote_addr.sin_addr.s_addr = INADDR_ANY;
-            conn->remote_addr.sin_port = 0;
-        }
-        
-        // Bind socket
-        if (bind(conn->fd, (struct sockaddr*)&conn->local_addr, sizeof(conn->local_addr)) < 0) {
-            fprintf(stderr, "Failed to bind UDP socket: %s\n", strerror(errno));
-            close(conn->fd);
-            free(conn);
-            return NULL;
-        }
-        
-        // Get the actual port we bound to
-        socklen_t len = sizeof(conn->local_addr);
-        if (getsockname(conn->fd, (struct sockaddr*)&conn->local_addr, &len) == 0) {
-            printf("MAVLink UDP socket bound to local port %d\n", ntohs(conn->local_addr.sin_port));
-        }
-        
-        // For UDP, we DON'T connect the socket
-        // This allows us to receive from any source, not just the connected address
-        conn->socket_connected = false;
-        
-        if (is_server_mode) {
-            printf("MAVLink listening on port %d (server mode)\n", port);
-        } else {
-            printf("MAVLink client mode: will send to %s:%d\n", ip, port);
-        }
+    // Create UDP socket
+    conn->fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (conn->fd < 0) {
+        fprintf(stderr, "Failed to create UDP socket: %s\n", strerror(errno));
+        free(conn);
+        return NULL;
     }
+    
+    // Enable SO_REUSEADDR to allow binding even if port is in use
+    int reuse = 1;
+    if (setsockopt(conn->fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
+        fprintf(stderr, "Warning: Failed to set SO_REUSEADDR: %s\n", strerror(errno));
+    }
+    
+    // Set socket to non-blocking
+    int flags = fcntl(conn->fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(conn->fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        fprintf(stderr, "Failed to set socket to non-blocking: %s\n", strerror(errno));
+        close(conn->fd);
+        free(conn);
+        return NULL;
+    }
+    
+    // Set receive timeout (like UDP example does)
+    // This prevents being stuck in recvfrom for too long
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000;  // 100ms timeout
+    if (setsockopt(conn->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        fprintf(stderr, "Warning: Failed to set SO_RCVTIMEO: %s\n", strerror(errno));
+    }
+    
+    // Set up local address
+    // For UDP client mode (udp:IP:PORT): bind to any available port (server will respond to source port)
+    // For UDP server mode (udp:PORT): bind to the specified port to listen (like UDP example)
+    memset(&conn->local_addr, 0, sizeof(conn->local_addr));
+    conn->local_addr.sin_family = AF_INET;
+    conn->local_addr.sin_addr.s_addr = INADDR_ANY;
+    if (is_server_mode) {
+        conn->local_addr.sin_port = htons(port);  // Bind to specified port (server mode)
+        printf("MAVLink server mode: listening on port %d\n", port);
+    } else {
+        conn->local_addr.sin_port = 0;  // Let system choose port (client mode)
+    }
+    
+    // Set up remote address (where we send messages)
+    // For server mode, remote address will be set from first received message
+    // For client mode, set it to the specified IP:PORT
+    memset(&conn->remote_addr, 0, sizeof(conn->remote_addr));
+    if (!is_server_mode) {
+        conn->remote_addr.sin_family = AF_INET;
+        conn->remote_addr.sin_port = htons(port);
+        if (inet_aton(ip, &conn->remote_addr.sin_addr) == 0) {
+            fprintf(stderr, "Invalid IP address: %s\n", ip);
+            close(conn->fd);
+            free(conn);
+            return NULL;
+        }
+    } else {
+        // Server mode: remote address will be set from first received message
+        conn->remote_addr.sin_family = AF_INET;
+        conn->remote_addr.sin_addr.s_addr = INADDR_ANY;
+        conn->remote_addr.sin_port = 0;
+    }
+    
+    // Bind socket
+    if (bind(conn->fd, (struct sockaddr*)&conn->local_addr, sizeof(conn->local_addr)) < 0) {
+        fprintf(stderr, "Failed to bind UDP socket: %s\n", strerror(errno));
+        close(conn->fd);
+        free(conn);
+        return NULL;
+    }
+    
+    // Get the actual port we bound to
+    socklen_t len = sizeof(conn->local_addr);
+    if (getsockname(conn->fd, (struct sockaddr*)&conn->local_addr, &len) == 0) {
+        printf("MAVLink UDP socket bound to local port %d\n", ntohs(conn->local_addr.sin_port));
+    }
+    
+    // For UDP, we DON'T connect the socket
+    // This allows us to receive from any source, not just the connected address
+    conn->socket_connected = false;
     
     // Initialize MAVLink connection parameters
     conn->system_id = MAV_SYSTEM_ID;
@@ -1210,6 +999,12 @@ static void* mavlink_connect(const char* address) {
     conn->target_component = MAV_COMP_ID_AUTOPILOT1;
     conn->connected = false;
     memset(&conn->status, 0, sizeof(conn->status));
+    
+    if (is_server_mode) {
+        printf("MAVLink listening on port %d (server mode)\n", port);
+    } else {
+        printf("MAVLink client mode: will send to %s:%d\n", ip, port);
+    }
     
     return (void*)conn;
 }
@@ -1224,13 +1019,6 @@ static void mavlink_disconnect(void* conn) {
         close(mconn->fd);
         mconn->fd = -1;
     }
-    
-    // Free serial device string if it exists
-    if (mconn->serial_device != NULL) {
-        free(mconn->serial_device);
-        mconn->serial_device = NULL;
-    }
-    
     free(conn);
 }
 
@@ -1245,27 +1033,59 @@ static int mavlink_receive_message(void* conn, char* msg_type, size_t msg_type_s
         return -1;
     }
     
+    uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
+    struct sockaddr_in src_addr;
+    socklen_t addr_len = sizeof(src_addr);
+    
+    // Receive UDP packet using recvfrom (works whether connected or not)
+    // This allows us to receive from any source
+    ssize_t recv_len = recvfrom(mconn->fd, buffer, sizeof(buffer), MSG_DONTWAIT,
+                                (struct sockaddr*)&src_addr, &addr_len);
+    
+    if (recv_len < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return -1;  // No data available (normal for non-blocking socket)
+        }
+        // Only print errors for unexpected conditions (not connection refused for UDP)
+        // Connection refused typically means nothing is listening, which is OK
+        // Don't spam errors - only print once in a while
+        static int error_count = 0;
+        if (errno != ECONNREFUSED && (error_count++ % 1000 == 0)) {
+            fprintf(stderr, "Error receiving MAVLink message (every 1000 attempts): %s\n", strerror(errno));
+        }
+        return -1;
+    }
+    
+    // Debug: Print first message received and update remote address for server mode
+    static bool first_message_received = false;
+    if (recv_len > 0) {
+        // Update remote address from first received message (for server mode)
+        // This allows us to send responses back to the sender
+        if (!first_message_received) {
+            first_message_received = true;
+            char src_ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &src_addr.sin_addr, src_ip, INET_ADDRSTRLEN);
+            printf("First UDP packet received from %s:%d (%zd bytes)\n", 
+                   src_ip, ntohs(src_addr.sin_port), recv_len);
+            
+            // Update remote address so we can send responses
+            memcpy(&mconn->remote_addr, &src_addr, sizeof(src_addr));
+            printf("Updated remote address to %s:%d for sending responses\n",
+                   src_ip, ntohs(src_addr.sin_port));
+        }
+    }
+    
+    if (recv_len < MAVLINK_NUM_HEADER_BYTES) {
+        return -1;  // Too short to be a valid MAVLink message
+    }
+    
+    // Parse MAVLink message character by character
     mavlink_message_t msg;
     mavlink_status_t status;
     bool message_received = false;
     
-    if (mconn->type == MAVLINK_CONNECTION_SERIAL) {
-        // Serial port: read byte-by-byte and parse character by character
-        uint8_t byte;
-        ssize_t bytes_read = serial_read_port(mconn->fd, &byte, 1);
-        
-        if (bytes_read <= 0) {
-            if (bytes_read < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                static int error_count = 0;
-                if (error_count++ % 1000 == 0) {
-                    fprintf(stderr, "Error reading from serial port (every 1000 attempts): %s\n", strerror(errno));
-                }
-            }
-            return -1;  // No data available or error
-        }
-        
-        // Parse single byte
-        uint8_t result = mavlink_parse_char(MAVLINK_COMM_0, byte, &msg, &status);
+    for (ssize_t i = 0; i < recv_len; i++) {
+        uint8_t result = mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status);
         
         if (result == MAVLINK_FRAMING_OK) {
             // Valid message received
@@ -1292,90 +1112,10 @@ static int mavlink_receive_message(void* conn, char* msg_type, size_t msg_type_s
             if (msg_dict_size >= sizeof(mavlink_message_t)) {
                 memcpy(msg_dict, &msg, sizeof(mavlink_message_t));
             }
-        }
-        
-    } else {
-        // UDP connection
-        uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
-        struct sockaddr_in src_addr;
-        socklen_t addr_len = sizeof(src_addr);
-        
-        // Receive UDP packet using recvfrom (works whether connected or not)
-        // This allows us to receive from any source
-        ssize_t recv_len = recvfrom(mconn->fd, buffer, sizeof(buffer), MSG_DONTWAIT,
-                                    (struct sockaddr*)&src_addr, &addr_len);
-        
-        if (recv_len < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                return -1;  // No data available (normal for non-blocking socket)
-            }
-            // Only print errors for unexpected conditions (not connection refused for UDP)
-            // Connection refused typically means nothing is listening, which is OK
-            // Don't spam errors - only print once in a while
-            static int error_count = 0;
-            if (errno != ECONNREFUSED && (error_count++ % 1000 == 0)) {
-                fprintf(stderr, "Error receiving MAVLink message (every 1000 attempts): %s\n", strerror(errno));
-            }
-            return -1;
-        }
-        
-        // Debug: Print first message received and update remote address for server mode
-        static bool first_message_received = false;
-        if (recv_len > 0) {
-            // Update remote address from first received message (for server mode)
-            // This allows us to send responses back to the sender
-            if (!first_message_received) {
-                first_message_received = true;
-                char src_ip[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &src_addr.sin_addr, src_ip, INET_ADDRSTRLEN);
-                printf("First UDP packet received from %s:%d (%zd bytes)\n", 
-                       src_ip, ntohs(src_addr.sin_port), recv_len);
-                
-                // Update remote address so we can send responses
-                memcpy(&mconn->remote_addr, &src_addr, sizeof(src_addr));
-                printf("Updated remote address to %s:%d for sending responses\n",
-                       src_ip, ntohs(src_addr.sin_port));
-            }
-        }
-        
-        if (recv_len < MAVLINK_NUM_HEADER_BYTES) {
-            return -1;  // Too short to be a valid MAVLink message
-        }
-        
-        // Parse MAVLink message character by character
-        for (ssize_t i = 0; i < recv_len; i++) {
-            uint8_t result = mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status);
             
-            if (result == MAVLINK_FRAMING_OK) {
-                // Valid message received
-                mconn->status = status;
-                message_received = true;
-                
-                // Update target system/component from heartbeat
-                if (msg.msgid == MAVLINK_MSG_ID_HEARTBEAT) {
-                    mconn->target_system = msg.sysid;
-                    mconn->target_component = msg.compid;
-                    mconn->connected = true;
-                }
-                
-                // Convert message ID to string
-                const char* msg_name = mavlink_get_message_name_by_id(msg.msgid);
-                if (msg_name != NULL) {
-                    strncpy(msg_type, msg_name, msg_type_size - 1);
-                    msg_type[msg_type_size - 1] = '\0';
-                } else {
-                    snprintf(msg_type, msg_type_size, "MSG_%u", (unsigned int)msg.msgid);
-                }
-                
-                // Store message data
-                if (msg_dict_size >= sizeof(mavlink_message_t)) {
-                    memcpy(msg_dict, &msg, sizeof(mavlink_message_t));
-                }
-                
-                break;  // Found valid message, exit loop
-            }
-            // Continue parsing even if we get bad CRC/signature (might be partial message)
+            break;  // Found valid message, exit loop
         }
+        // Continue parsing even if we get bad CRC/signature (might be partial message)
     }
     
     if (message_received) {
@@ -1395,11 +1135,9 @@ static int mavlink_send_heartbeat(void* conn) {
         return -1;
     }
     
-    // For UDP server mode, don't send until we've received a message (to know where to send)
-    if (mconn->type == MAVLINK_CONNECTION_UDP) {
-        if (mconn->remote_addr.sin_addr.s_addr == INADDR_ANY || mconn->remote_addr.sin_port == 0) {
-            return -1;  // No remote address set yet
-        }
+    // In server mode, don't send until we've received a message (to know where to send)
+    if (mconn->remote_addr.sin_addr.s_addr == INADDR_ANY || mconn->remote_addr.sin_port == 0) {
+        return -1;  // No remote address set yet
     }
     
     mavlink_message_t msg;
@@ -1417,24 +1155,18 @@ static int mavlink_send_heartbeat(void* conn) {
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
     
-    ssize_t sent;
-    if (mconn->type == MAVLINK_CONNECTION_SERIAL) {
-        // Serial port: write directly
-        sent = serial_write_port(mconn->fd, buffer, len);
-    } else {
-        // UDP: use sendto
-        sent = sendto(mconn->fd, buffer, len, 0,
-                     (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
-        
-        // Debug: Print first heartbeat sent
-        static bool first_heartbeat_sent = false;
-        if (!first_heartbeat_sent && sent > 0) {
-            first_heartbeat_sent = true;
-            char ip_str[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &mconn->remote_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-            printf("First MAVLink heartbeat sent to %s:%d (%d bytes)\n", 
-                   ip_str, ntohs(mconn->remote_addr.sin_port), len);
-        }
+    // Always use sendto for UDP (works whether connected or not)
+    ssize_t sent = sendto(mconn->fd, buffer, len, 0,
+                         (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
+    
+    // Debug: Print first heartbeat sent
+    static bool first_heartbeat_sent = false;
+    if (!first_heartbeat_sent && sent > 0) {
+        first_heartbeat_sent = true;
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &mconn->remote_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
+        printf("First MAVLink heartbeat sent to %s:%d (%d bytes)\n", 
+               ip_str, ntohs(mconn->remote_addr.sin_port), len);
     }
     
     if (sent != len && sent >= 0) {
@@ -1485,13 +1217,9 @@ static int mavlink_send_set_position_target_local_ned(void* conn, uint32_t time_
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
     
-    ssize_t sent;
-    if (mconn->type == MAVLINK_CONNECTION_SERIAL) {
-        sent = serial_write_port(mconn->fd, buffer, len);
-    } else {
-        sent = sendto(mconn->fd, buffer, len, 0,
-                     (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
-    }
+    // Always use sendto for UDP
+    ssize_t sent = sendto(mconn->fd, buffer, len, 0,
+                         (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
     
     return (sent == len) ? 0 : -1;
 }
@@ -1538,13 +1266,9 @@ static int mavlink_send_set_attitude_target(void* conn, uint32_t time_boot_ms, u
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
     
-    ssize_t sent;
-    if (mconn->type == MAVLINK_CONNECTION_SERIAL) {
-        sent = serial_write_port(mconn->fd, buffer, len);
-    } else {
-        sent = sendto(mconn->fd, buffer, len, 0,
-                     (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
-    }
+    // Always use sendto for UDP
+    ssize_t sent = sendto(mconn->fd, buffer, len, 0,
+                         (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
     
     return (sent == len) ? 0 : -1;
 }
@@ -1580,13 +1304,9 @@ static int mavlink_send_command_long(void* conn, uint16_t command, float param1,
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
     
-    ssize_t sent;
-    if (mconn->type == MAVLINK_CONNECTION_SERIAL) {
-        sent = serial_write_port(mconn->fd, buffer, len);
-    } else {
-        sent = sendto(mconn->fd, buffer, len, 0,
-                     (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
-    }
+    // Always use sendto for UDP
+    ssize_t sent = sendto(mconn->fd, buffer, len, 0,
+                         (struct sockaddr*)&mconn->remote_addr, sizeof(mconn->remote_addr));
     
     return (sent == len) ? 0 : -1;
 }
