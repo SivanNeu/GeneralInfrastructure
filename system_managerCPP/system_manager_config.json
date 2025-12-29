@@ -14,10 +14,10 @@
   "originOffset_frd": [0.0, 0.0, 0.0],
   "terminalHomingAlowed": true,
   "circleRadius": 5.0,
-  "primaryControllerType": "VELOCITYPID",
-  "primaryControllerParamsFile": "velocity_pid_controller_params.json",
-  "secondaryControllerType": "",
-  "secondaryControllerParamsFile": "",
+  "primaryControllerType": "VELOCITYRL",
+  "primaryControllerParamsFile": "velocity_rl_controller_params.json",
+  "secondaryControllerType":  "VELOCITYPID",
+  "secondaryControllerParamsFile": "velocity_pid_controller_params.json",
   "yawCommandType": "RATE",
   "rateControlEnabled": false
 }

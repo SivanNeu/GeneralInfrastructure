@@ -42,6 +42,7 @@ train_dir/
 hardware_adapter/bin/
 hardware_adapter/c/bin/
 hardware_adapter/c/obj_*/
+rlPolicyCPP/bin/
 
 # Logs
 *.log
