@@ -598,9 +598,13 @@ std::vector<float> RLPolicyJSON::normalize_obs(const std::vector<float>& obs) co
     std::vector<float> RLPolicyJSON::gru_forward(const std::vector<float>& input) {
         // GRU computation: simplified single-step forward
         // For full GRU: h_t = (1 - z_t) * h_{t-1} + z_t * n_t
-        // where z_t = sigmoid(W_z @ x + U_z @ h + b_z)
-        //       r_t = sigmoid(W_r @ x + U_r @ h + b_r)
-        //       n_t = tanh(W_n @ x + r_t * (U_n @ h) + b_n)
+        // where z_t = sigmoid(W_z @ x + U_z @ h + b_z)  [update gate]
+        //       r_t = sigmoid(W_r @ x + U_r @ h + b_r)  [reset gate]
+        //       n_t = tanh(W_n @ x + r_t * (U_n @ h) + b_n)  [new gate]
+        //
+        // IMPORTANT: The tanh activation for the new gate (n) is hardcoded as part of
+        // the standard GRU architecture. This is NOT configurable and is independent
+        // of the activation function parameter (relu/elu/tanh) used in encoder layers.
         
         (void)input;  // Suppress unused parameter warning if input size matches gru_input_size_
         int hidden = gru_hidden_size_;
@@ -634,25 +638,30 @@ std::vector<float> RLPolicyJSON::normalize_obs(const std::vector<float>& obs) co
     };
     
     // Element-wise operations
+    // Note: GRU cell always uses sigmoid for z/r gates and tanh for n gate.
+    // This is part of the standard GRU architecture and is NOT configurable.
+    // The activation function parameter (relu/elu/tanh) only applies to encoder MLP layers.
     auto sigmoid = [](float x) { return 1.0f / (1.0f + std::exp(-x)); };
     auto tanh_func = [](float x) { return std::tanh(x); };
     
     // Get gate weights and biases
-    auto W_z = get_gate_weights(gru_weights_.weight_ih, 0, hidden);
-    auto W_r = get_gate_weights(gru_weights_.weight_ih, 1, hidden);
-    auto W_n = get_gate_weights(gru_weights_.weight_ih, 2, hidden);
+    // IMPORTANT: PyTorch GRU gate order is [reset, update, new], NOT [update, reset, new]!
+    // Gate order: [r_gate, z_gate, n_gate]
+    auto W_r = get_gate_weights(gru_weights_.weight_ih, 0, hidden);  // RESET gate
+    auto W_z = get_gate_weights(gru_weights_.weight_ih, 1, hidden);  // UPDATE gate
+    auto W_n = get_gate_weights(gru_weights_.weight_ih, 2, hidden);  // NEW gate
     
-    auto U_z = get_gate_weights(gru_weights_.weight_hh, 0, hidden);
-    auto U_r = get_gate_weights(gru_weights_.weight_hh, 1, hidden);
-    auto U_n = get_gate_weights(gru_weights_.weight_hh, 2, hidden);
+    auto U_r = get_gate_weights(gru_weights_.weight_hh, 0, hidden);  // RESET gate
+    auto U_z = get_gate_weights(gru_weights_.weight_hh, 1, hidden);  // UPDATE gate
+    auto U_n = get_gate_weights(gru_weights_.weight_hh, 2, hidden);  // NEW gate
     
-    auto b_z_ih = get_gate_bias(gru_weights_.bias_ih, 0, hidden);
-    auto b_r_ih = get_gate_bias(gru_weights_.bias_ih, 1, hidden);
-    auto b_n_ih = get_gate_bias(gru_weights_.bias_ih, 2, hidden);
+    auto b_r_ih = get_gate_bias(gru_weights_.bias_ih, 0, hidden);  // RESET gate
+    auto b_z_ih = get_gate_bias(gru_weights_.bias_ih, 1, hidden);  // UPDATE gate
+    auto b_n_ih = get_gate_bias(gru_weights_.bias_ih, 2, hidden);  // NEW gate
     
-    auto b_z_hh = get_gate_bias(gru_weights_.bias_hh, 0, hidden);
-    auto b_r_hh = get_gate_bias(gru_weights_.bias_hh, 1, hidden);
-    auto b_n_hh = get_gate_bias(gru_weights_.bias_hh, 2, hidden);
+    auto b_r_hh = get_gate_bias(gru_weights_.bias_hh, 0, hidden);  // RESET gate
+    auto b_z_hh = get_gate_bias(gru_weights_.bias_hh, 1, hidden);  // UPDATE gate
+    auto b_n_hh = get_gate_bias(gru_weights_.bias_hh, 2, hidden);  // NEW gate
     
     // Current hidden state
     std::vector<float> h_prev = hxs_;
@@ -667,17 +676,25 @@ std::vector<float> RLPolicyJSON::normalize_obs(const std::vector<float>& obs) co
     std::vector<float> n_h = matvec(U_n, h_prev);
     
     // Add biases and apply activations
+    // Note: For z and r gates, biases are simply added: sigmoid(W @ x + U @ h + b_ih + b_hh)
+    // For n gate, the formula is: tanh(W_n @ x + b_n_ih + r * (U_n @ h + b_n_hh))
+    // This matches PyTorch's GRU implementation
     std::vector<float> z(hidden), r(hidden), n(hidden);
     for (int i = 0; i < hidden; i++) {
         z[i] = sigmoid(z_t[i] + z_h[i] + b_z_ih[i] + b_z_hh[i]);
         r[i] = sigmoid(r_t[i] + r_h[i] + b_r_ih[i] + b_r_hh[i]);
-        n[i] = tanh_func(n_t[i] + r[i] * n_h[i] + b_n_ih[i] + b_n_hh[i]);
+        // New gate: tanh(W_n @ x + b_n_ih + r * (U_n @ h + b_n_hh))
+        n[i] = tanh_func(n_t[i] + b_n_ih[i] + r[i] * (n_h[i] + b_n_hh[i]));
     }
     
-    // Update hidden state: h = (1 - z) * h_prev + z * n
+    // Update hidden state
+    // PyTorch GRU uses: h = n + z * (h_prev - n)
+    // This is equivalent to: h = (1 - z) * n + z * h_prev
+    // NOT the standard: h = (1 - z) * h_prev + z * n
+    // These are mathematically equivalent, but PyTorch's implementation uses the first form
     std::vector<float> h_next(hidden);
     for (int i = 0; i < hidden; i++) {
-        h_next[i] = (1.0f - z[i]) * h_prev[i] + z[i] * n[i];
+        h_next[i] = n[i] + z[i] * (h_prev[i] - n[i]);
     }
     
     hxs_ = h_next;

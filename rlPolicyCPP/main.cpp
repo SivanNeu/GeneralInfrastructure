@@ -122,36 +122,32 @@ bool write_results(const std::string& output_path,
         }
     }
     
+    // Write column names with fixed width of 14 characters
     file << "# ";
     for (size_t i = 0; i < col_names.size(); i++) {
-        file << col_names[i];
-        if (i < col_names.size() - 1) file << " ";
+        file << std::setw(14) << std::left << col_names[i];
     }
     file << "\n";
     
-    // Write data
+    // Write data with fixed column width of 14 characters
     file << std::fixed << std::setprecision(8);
     for (size_t i = 0; i < observations.size(); i++) {
-        bool first = true;
-        
         // Write observation
         for (size_t j = 0; j < observations[i].size(); j++) {
-            if (!first) file << " ";
-            file << observations[i][j];
-            first = false;
+            file << std::setw(14) << std::right << observations[i][j];
         }
         
         // Write reference actions (if available)
         if (has_ref_actions && i < ref_actions.size() && !ref_actions[i].empty()) {
             for (size_t j = 0; j < ref_actions[i].size(); j++) {
-                file << " " << ref_actions[i][j];
+                file << std::setw(14) << std::right << ref_actions[i][j];
             }
         }
         
         // Write calculated actions
         if (i < calc_actions.size()) {
             for (size_t j = 0; j < calc_actions[i].size(); j++) {
-                file << " " << calc_actions[i][j];
+                file << std::setw(14) << std::right << calc_actions[i][j];
             }
         }
         
@@ -160,7 +156,7 @@ bool write_results(const std::string& output_path,
             i < calc_actions.size() && ref_actions[i].size() == calc_actions[i].size()) {
             for (size_t j = 0; j < ref_actions[i].size(); j++) {
                 float diff = calc_actions[i][j] - ref_actions[i][j];
-                file << " " << diff;
+                file << std::setw(14) << std::right << diff;
             }
         }
         

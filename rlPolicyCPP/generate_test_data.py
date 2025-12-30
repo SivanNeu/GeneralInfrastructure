@@ -20,14 +20,19 @@ import numpy as np
 import importlib.util
 from pathlib import Path
 
-# Add parent directory to path to import rl_policyClean
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add current directory to path to import rl_policyClean from same directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Import will be handled in main() to provide better error messages
+RLPolicyClean = None
 try:
     from rl_policyClean import RLPolicyClean
-except ImportError:
-    print("Error: Could not import RLPolicyClean. Make sure rl_policyClean.py is in the parent directory.")
-    sys.exit(1)
+except ImportError as e:
+    # Store the error to be handled in main()
+    _import_error = e
+    RLPolicyClean = None
+else:
+    _import_error = None
 
 
 def load_environment(env_file_path):
@@ -44,13 +49,34 @@ def load_environment(env_file_path):
     if not env_file_path.exists():
         raise FileNotFoundError(f"Environment file not found: {env_file_path}")
     
+    # Add necessary paths to sys.path for imports
+    # Find the 'src' directory by navigating up from the environment file
+    # This allows Quadcopter_SimCon and other modules to be imported
+    current_path = env_file_path.parent
+    src_dir = None
+    max_depth = 10  # Prevent infinite loop
+    depth = 0
+    while depth < max_depth and current_path != current_path.parent:
+        if current_path.name == 'src':
+            src_dir = current_path
+            break
+        current_path = current_path.parent
+        depth += 1
+    
+    if src_dir is not None:
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+    
+    # Also add the environment file's parent directory
+    if str(env_file_path.parent) not in sys.path:
+        sys.path.insert(0, str(env_file_path.parent))
+    
     # Load the module
     spec = importlib.util.spec_from_file_location("env_module", env_file_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load environment module from {env_file_path}")
     
     env_module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(env_file_path.parent))
     
     try:
         spec.loader.exec_module(env_module)
@@ -247,20 +273,21 @@ def save_test_data(observations, actions, output_file, include_actions=True):
             col_names.extend([f"mean_{i}" for i in range(num_action_channels)])
             # Add logstd columns
             col_names.extend([f"logstd_{i}" for i in range(num_action_channels)])
-        f.write("# " + " ".join(col_names) + "\n")
+        # Format column names with 14 character width
+        f.write("# " + "".join(f"{name:14s}" for name in col_names) + "\n")
         
-        # Write data
+        # Write data with fixed column width of 14 characters
         for i in range(num_samples):
             # Write observation
-            obs_str = ' '.join(f'{x:.8f}' for x in observations[i])
+            obs_str = ''.join(f'{x:14.8f}' for x in observations[i])
             f.write(obs_str)
             
             # Write action if included
             if include_actions and actions is not None:
                 if len(actions.shape) > 1:
-                    act_str = ' ' + ' '.join(f'{x:.8f}' for x in actions[i])
+                    act_str = ''.join(f'{x:14.8f}' for x in actions[i])
                 else:
-                    act_str = f' {actions[i]:.8f}'
+                    act_str = f'{actions[i]:14.8f}'
                 f.write(act_str)
             
             f.write('\n')
@@ -274,12 +301,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Output file will be created in same directory as .pth file
+  # Output file will be created in same directory as .pth file with name based on .pth file
   python generate_test_data.py --pth=checkpoint.pth --env=point_trajectory_env.py
+  # Creates: checkpoint_test_data.txt in same directory as checkpoint.pth
+  
   python generate_test_data.py --pth=checkpoint.pth --env=point_trajectory_env.py --samples=200 --method=grid
   
-  # Or specify custom output location
-  python generate_test_data.py --pth=checkpoint.pth --env=point_trajectory_env.py --output=custom_path.txt
+  # Specify custom extension (file name still based on .pth file)
+  python generate_test_data.py --pth=checkpoint.pth --env=point_trajectory_env.py --output=.dat
+  # Creates: checkpoint_test_data.dat in same directory as checkpoint.pth
         """
     )
     parser.add_argument('--samples', type=int, default=10,
@@ -289,7 +319,7 @@ Examples:
     parser.add_argument('--env', type=str, required=True,
                        help='Path to environment Python file')
     parser.add_argument('--output', type=str, default=None,
-                       help='Output file path for test data (default: same directory as .pth file with .txt extension)')
+                       help='Output file extension (optional). File name is always based on .pth file name and created in .pth file directory (default: .txt)')
     parser.add_argument('--method', type=str, default='uniform', choices=['uniform', 'grid'],
                        help='Sampling method: uniform (random) or grid (default: uniform)')
     parser.add_argument('--nonlinearity', type=str, default='relu', choices=['relu', 'elu', 'tanh'],
@@ -303,6 +333,14 @@ Examples:
     
     args = parser.parse_args()
     
+    # Check if import was successful
+    if RLPolicyClean is None:
+        print("Error: Could not import RLPolicyClean.")
+        print(f"  Make sure rl_policyClean.py is in the same directory as generate_test_data.py.")
+        if _import_error:
+            print(f"  Import error: {_import_error}")
+        return 1
+    
     # Validate files
     if not os.path.exists(args.pth):
         print(f"Error: Checkpoint file not found: {args.pth}")
@@ -312,14 +350,26 @@ Examples:
         print(f"Error: Environment file not found: {args.env}")
         return 1
     
-    # Determine output file path
+    # Determine output file path - always based on pth file and in pth file folder
+    pth_path = Path(args.pth).resolve()
+    pth_dir = pth_path.parent
+    pth_stem = pth_path.stem  # filename without extension
+    
+    # Always use pth file name as base and create in pth file directory
     if args.output is None:
-        # Generate output path in same directory as .pth file
-        pth_path = Path(args.pth).resolve()
-        pth_dir = pth_path.parent
-        pth_stem = pth_path.stem  # filename without extension
+        # Default: use .txt extension
         args.output = str(pth_dir / f"{pth_stem}_test_data.txt")
         print(f"Output file not specified, using: {args.output}")
+    else:
+        # If output is specified, extract extension if provided, otherwise use .txt
+        output_path_specified = Path(args.output)
+        output_ext = output_path_specified.suffix if output_path_specified.suffix else '.txt'
+        # Always use pth file name as base, place in pth file directory
+        args.output = str(pth_dir / f"{pth_stem}_test_data{output_ext}")
+        if output_path_specified.suffix:
+            print(f"Output file specified with extension '{output_ext}', using: {args.output}")
+        else:
+            print(f"Output file will be based on pth file name: {args.output}")
     
     # Ensure output directory exists
     output_path = Path(args.output).resolve()
@@ -404,4 +454,27 @@ Examples:
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    exit_code = 0
+    try:
+        exit_code = main()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user", file=sys.stderr)
+        exit_code = 1
+    except Exception as e:
+        print(f"\nUnexpected error in main(): {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        exit_code = 1
+    finally:
+        # Flush all output before exiting
+        sys.stdout.flush()
+        sys.stderr.flush()
+        if exit_code != 0:
+            # Ensure error is visible - print to both stdout and stderr
+            error_msg = f"ERROR: Script failed with exit code {exit_code}"
+            print(error_msg, file=sys.stderr)
+            print(error_msg)  # Also to stdout for visibility
+            sys.stdout.flush()
+            sys.stderr.flush()
+    
+    sys.exit(exit_code)
