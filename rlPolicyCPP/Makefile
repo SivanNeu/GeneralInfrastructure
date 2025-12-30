@@ -13,19 +13,14 @@ else
     CXXFLAGS = -std=c++17 -Wall -Wextra -g -O0 -DDEBUG
 endif
 
-# Paths - adjust these based on your system
-TORCH_DIR ?= /path/to/libtorch
-TORCH_INCLUDE = -I$(TORCH_DIR)/include -I$(TORCH_DIR)/include/torch/csrc/api/include
-TORCH_LIBS = -L$(TORCH_DIR)/lib -ltorch -ltorch_cpu -lc10
-
-# Default: build without libtorch (JSON-only)
+# Default: build JSON-only implementation (no libtorch required)
 all: bin/rlPolicyCPP
 
 # Create bin directory (order-only prerequisite)
 bin:
 	mkdir -p bin
 
-# Build main program (JSON-based, no libtorch required)
+# Build main program (JSON-only, no libtorch)
 bin/rlPolicyCPP: bin/main.o bin/RLPolicyJSON.o | bin
 	$(CXX) $(CXXFLAGS) -o $@ $^ -lm
 
@@ -35,12 +30,7 @@ bin/main.o: main.cpp RLPolicyJSON.h | bin
 bin/RLPolicyJSON.o: RLPolicyJSON.cpp RLPolicyJSON.h | bin
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
-# Build test comparison program (requires libtorch)
-bin/test_comparison: bin/test_comparison.o bin/RLPolicyJSON.o | bin
-	$(CXX) $(CXXFLAGS) -o $@ $^ $(TORCH_LIBS) -Wl,-rpath,$(TORCH_DIR)/lib
-
-bin/test_comparison.o: test_comparison.cpp RLPolicyJSON.h | bin
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(TORCH_INCLUDE) -c $< -o $@
+# Note: test_comparison program removed (required libtorch)
 
 # Convenience aliases
 main: bin/rlPolicyCPP
@@ -55,8 +45,7 @@ clean:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  make rlPolicyCPP       - Build JSON-based policy program (no libtorch)"
-	@echo "  make test_comparison   - Build comparison test (requires libtorch)"
+	@echo "  make rlPolicyCPP       - Build policy program (JSON-only, no libtorch required)"
 	@echo "  make clean             - Remove build artifacts"
 	@echo ""
 	@echo "Build modes (default: debug):"
@@ -64,9 +53,5 @@ help:
 	@echo "  make BUILD=release rlPolicyCPP   - Build optimized (-O3 -DNDEBUG)"
 	@echo ""
 	@echo "Current build mode: $(BUILD)"
-	@echo ""
-	@echo "To build test_comparison, set TORCH_DIR environment variable:"
-	@echo "  export TORCH_DIR=/path/to/libtorch"
-	@echo "  make test_comparison"
 
-.PHONY: all clean help main rlPolicyCPP test_comparison
+.PHONY: all clean help main rlPolicyCPP
