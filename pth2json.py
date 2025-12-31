@@ -9,23 +9,37 @@ import json
 import sys
 import os
 import argparse
+import base64
+import numpy as np
 from pathlib import Path
 
 
 def tensor_to_dict(tensor):
     """
     Convert a PyTorch tensor to a dictionary with data, shape, and dtype.
+    Data is stored as base64-encoded bytes for efficient storage.
     This format is easier to parse from C++.
     """
-    # Ensure tensor is on CPU and convert to list
+    # Ensure tensor is on CPU
     if tensor.device.type != 'cpu':
         tensor = tensor.cpu()
     
+    # Convert tensor to numpy array and get raw bytes
+    np_array = tensor.detach().numpy()
+    # Ensure contiguous array for proper byte representation
+    if not np_array.flags['C_CONTIGUOUS']:
+        np_array = np.ascontiguousarray(np_array)
+    
+    # Get raw bytes and encode to base64
+    raw_bytes = np_array.tobytes()
+    base64_data = base64.b64encode(raw_bytes).decode('utf-8')
+    
     return {
-        'data': tensor.tolist(),
+        'data': base64_data,
         'shape': list(tensor.shape),
         'dtype': str(tensor.dtype),
-        'numel': int(tensor.numel())  # Total number of elements
+        'numel': int(tensor.numel()),  # Total number of elements
+        'encoding': 'base64'  # Indicate the encoding format
     }
 
 

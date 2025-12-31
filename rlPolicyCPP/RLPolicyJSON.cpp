@@ -6,6 +6,66 @@
 #include <cstring>
 #include <regex>
 #include <set>
+#include <vector>
+#include <cstdint>
+
+// Base64 decoding helper functions
+static inline bool is_base64(unsigned char c) {
+    return (isalnum(c) || (c == '+') || (c == '/'));
+}
+
+static std::vector<uint8_t> base64_decode(const std::string& encoded_string) {
+    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<uint8_t> result;
+    int in_len = static_cast<int>(encoded_string.size());
+    int i = 0;
+    int in = 0;
+    unsigned char char_array_4[4], char_array_3[3];
+    
+    while (in_len-- && (encoded_string[in] != '=') && is_base64(encoded_string[in])) {
+        char_array_4[i++] = encoded_string[in]; in++;
+        if (i == 4) {
+            for (i = 0; i < 4; i++) {
+                size_t pos = chars.find(char_array_4[i]);
+                if (pos != std::string::npos) {
+                    char_array_4[i] = static_cast<unsigned char>(pos);
+                } else {
+                    char_array_4[i] = 0;
+                }
+            }
+            
+            char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+            char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+            char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+            
+            for (i = 0; (i < 3); i++)
+                result.push_back(char_array_3[i]);
+            i = 0;
+        }
+    }
+    
+    if (i) {
+        for (int j = i; j < 4; j++)
+            char_array_4[j] = 0;
+        
+        for (int j = 0; j < 4; j++) {
+            size_t pos = chars.find(char_array_4[j]);
+            if (pos != std::string::npos) {
+                char_array_4[j] = static_cast<unsigned char>(pos);
+            } else {
+                char_array_4[j] = 0;
+            }
+        }
+        
+        char_array_3[0] = (char_array_4[0] << 2) + ((char_array_4[1] & 0x30) >> 4);
+        char_array_3[1] = ((char_array_4[1] & 0xf) << 4) + ((char_array_4[2] & 0x3c) >> 2);
+        char_array_3[2] = ((char_array_4[2] & 0x3) << 6) + char_array_4[3];
+        
+        for (int j = 0; (j < i - 1); j++) result.push_back(char_array_3[j]);
+    }
+    
+    return result;
+}
 
 // Simple JSON value storage
 struct RLPolicyJSON::JSONValue {
@@ -292,13 +352,80 @@ bool RLPolicyJSON::extract_tensor(const std::string& key, std::vector<float>& da
         }
     }
     
-    // Extract data (flattened array)
+    // Extract data - check if it's base64 encoded or array format
     auto data_it = tensor_obj->object.find("data");
     if (data_it == tensor_obj->object.end()) return false;
     auto data_val = data_it->second;
     
+    // Check encoding format
+    auto encoding_it = tensor_obj->object.find("encoding");
+    bool is_base64_encoded = false;
+    if (encoding_it != tensor_obj->object.end() && 
+        encoding_it->second->type == JSONValue::STRING &&
+        encoding_it->second->string_val == "base64") {
+        is_base64_encoded = true;
+    }
+    
     data.clear();
-    extract_flattened_array(data_val, data);
+    
+    if (is_base64_encoded) {
+        // Decode base64 string to bytes, then convert to floats
+        if (data_val->type != JSONValue::STRING) {
+            std::cerr << "Error: Expected string for base64 data" << std::endl;
+            return false;
+        }
+        
+        // Decode base64
+        std::vector<uint8_t> decoded_bytes = base64_decode(data_val->string_val);
+        
+        // Get dtype to determine element size
+        auto dtype_it = tensor_obj->object.find("dtype");
+        std::string dtype = "float32";  // default
+        if (dtype_it != tensor_obj->object.end() && dtype_it->second->type == JSONValue::STRING) {
+            dtype = dtype_it->second->string_val;
+        }
+        
+        // Determine element size based on dtype
+        size_t element_size = 4;  // default to float32
+        if (dtype.find("float64") != std::string::npos || dtype.find("double") != std::string::npos) {
+            element_size = 8;
+        } else if (dtype.find("float32") != std::string::npos || dtype.find("float") != std::string::npos) {
+            element_size = 4;
+        } else if (dtype.find("float16") != std::string::npos || dtype.find("half") != std::string::npos) {
+            element_size = 2;
+        }
+        
+        // Convert bytes to floats (assuming little-endian, native byte order)
+        size_t num_elements = decoded_bytes.size() / element_size;
+        data.reserve(num_elements);
+        
+        if (element_size == 4) {
+            // float32 - direct copy is most efficient
+            data.resize(num_elements);
+            std::memcpy(data.data(), decoded_bytes.data(), num_elements * sizeof(float));
+        } else {
+            // For other sizes, convert element by element
+            for (size_t i = 0; i < num_elements; i++) {
+                float val = 0.0f;
+                if (element_size == 8) {
+                    // float64 -> convert to float32
+                    double val_double = 0.0;
+                    std::memcpy(&val_double, &decoded_bytes[i * 8], sizeof(double));
+                    val = static_cast<float>(val_double);
+                } else if (element_size == 2) {
+                    // float16 -> convert to float32 (simplified, may need proper half precision conversion)
+                    uint16_t bits = 0;
+                    std::memcpy(&bits, &decoded_bytes[i * 2], sizeof(uint16_t));
+                    // Simple conversion (for proper half precision, use a library)
+                    val = static_cast<float>(bits) / 65536.0f;  // rough approximation
+                }
+                data.push_back(val);
+            }
+        }
+    } else {
+        // Old format: extract from nested array
+        extract_flattened_array(data_val, data);
+    }
     
     return true;
 }
