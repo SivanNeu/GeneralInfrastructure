@@ -34,5 +34,8 @@ Thumbs.db
 # Logs
 *.log
 
+# CSV log files from log directory
+log/*.csv
+
 # Config directory
 config/

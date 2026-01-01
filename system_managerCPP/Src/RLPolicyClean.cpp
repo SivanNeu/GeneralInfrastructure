@@ -1,342 +1,409 @@
 #include "RLPolicyClean.h"
-#include <torch/torch.h>
-#include <torch/script.h>
+#include "utils/SimpleJSONParser.h"
 #include <iostream>
-#include <fstream>
 #include <stdexcept>
-#include <algorithm>
-#include <memory>
 
-RLPolicyClean::RLPolicyClean() : hxs(), gru_hidden_size(512) {
+RLPolicyClean::RLPolicyClean() : gru_hidden_size(512), gru_input_size(0) {
+    hxs = VectorXd::Zero(gru_hidden_size);
 }
 
-
-std::vector<int> RLPolicyClean::_find_mlp_linear_indices(const std::string& checkpoint_path) {
-    // This would need to load the checkpoint and parse keys
-    // For now, return empty - actual implementation would load torch checkpoint
+bool RLPolicyClean::load_normalizer_from_json() {
+    if (!json_parser_) return false;
+    
+    std::string mean_key = "obs_normalizer.running_mean_std.running_mean_std.obs.running_mean";
+    std::string var_key = "obs_normalizer.running_mean_std.running_mean_std.obs.running_var";
+    
+    std::vector<float> mean_data, var_data;
+    std::vector<int> mean_shape, var_shape;
+    
+    if (json_parser_->extract_tensor(mean_key, mean_data, mean_shape) && 
+        json_parser_->extract_tensor(var_key, var_data, var_shape)) {
+        int obs_size = mean_shape.empty() ? mean_data.size() : mean_shape[0];
+        obs_mean = VectorXd(obs_size);
+        obs_var = VectorXd(obs_size);
+        for (int i = 0; i < obs_size; i++) {
+            obs_mean[i] = static_cast<double>(mean_data[i]);
+            obs_var[i] = static_cast<double>(var_data[i]);
+        }
+        return true;
+    }
+    
+    // Fallback: infer from encoder
     std::vector<int> indices;
-    // TODO: Implement checkpoint key parsing
-    return indices;
+    if (json_parser_->find_mlp_linear_indices(indices) && !indices.empty()) {
+        std::string first_w_key = "encoder.encoders.obs.mlp_head." + std::to_string(indices[0]) + ".weight";
+        std::vector<float> first_w_data;
+        std::vector<int> first_w_shape;
+        if (json_parser_->extract_tensor(first_w_key, first_w_data, first_w_shape) && first_w_shape.size() >= 2) {
+            int obs_size = first_w_shape[1];
+            obs_mean = VectorXd::Zero(obs_size);
+            obs_var = VectorXd::Ones(obs_size);
+            return true;
+        }
+    }
+    
+    // Last resort
+    obs_mean = VectorXd::Zero(1);
+    obs_var = VectorXd::Ones(1);
+    return true;
 }
 
-std::shared_ptr<torch::nn::Sequential> RLPolicyClean::_build_encoder_from_ckpt(
-    const std::string& checkpoint_path,
-    const std::string& nonlinearity,
-    bool jit) {
+bool RLPolicyClean::build_encoder_from_json(Activation nonlinearity) {
+    if (!json_parser_) return false;
     
-    // Placeholder - would load from checkpoint
-    // In practice, this would:
-    // 1. Load checkpoint
-    // 2. Find MLP layer indices
-    // 3. Build Sequential module with Linear/Activation layers
+    encoder_layers_.clear();
     
-    // Build Sequential module - Sequential is a ModuleHolder, use -> to access methods
-    torch::nn::Sequential seq;
-    seq->push_back("linear1", torch::nn::Linear(torch::nn::LinearOptions(4, 64)));
-    if (nonlinearity == "relu") {
-        seq->push_back("act1", torch::nn::ReLU(torch::nn::ReLUOptions().inplace(false)));
-    } else if (nonlinearity == "elu") {
-        seq->push_back("act1", torch::nn::ELU(torch::nn::ELUOptions().inplace(false)));
-    } else if (nonlinearity == "tanh") {
-        seq->push_back("act1", torch::nn::Tanh());
+    std::vector<int> indices;
+    if (!json_parser_->find_mlp_linear_indices(indices)) {
+        return true;  // No encoder layers - use identity
     }
     
-    seq->push_back("linear2", torch::nn::Linear(torch::nn::LinearOptions(64, 128)));
-    if (nonlinearity == "relu") {
-        seq->push_back("act2", torch::nn::ReLU(torch::nn::ReLUOptions().inplace(false)));
-    } else if (nonlinearity == "elu") {
-        seq->push_back("act2", torch::nn::ELU(torch::nn::ELUOptions().inplace(false)));
-    } else if (nonlinearity == "tanh") {
-        seq->push_back("act2", torch::nn::Tanh());
+    for (int idx : indices) {
+        std::string w_key = "encoder.encoders.obs.mlp_head." + std::to_string(idx) + ".weight";
+        std::string b_key = "encoder.encoders.obs.mlp_head." + std::to_string(idx) + ".bias";
+        
+        std::vector<float> w_data, b_data;
+        std::vector<int> w_shape, b_shape;
+        
+        if (!json_parser_->extract_tensor(w_key, w_data, w_shape) || 
+            !json_parser_->extract_tensor(b_key, b_data, b_shape)) {
+            std::cerr << "Warning: Could not load encoder layer " << idx << std::endl;
+            continue;
+        }
+        
+        if (w_shape.size() != 2) {
+            std::cerr << "Warning: Invalid weight shape for layer " << idx << std::endl;
+            continue;
+        }
+        
+        EncoderLayer layer;
+        layer.linear.in_features = w_shape[1];
+        layer.linear.out_features = w_shape[0];
+        layer.activation = nonlinearity;
+        
+        // Reshape weight matrix: [out_features, in_features]
+        layer.linear.weights.resize(w_shape[0]);
+        for (int i = 0; i < w_shape[0]; i++) {
+            layer.linear.weights[i].resize(w_shape[1]);
+            for (int j = 0; j < w_shape[1]; j++) {
+                layer.linear.weights[i][j] = w_data[i * w_shape[1] + j];
+            }
+        }
+        
+        layer.linear.bias = b_data;
+        encoder_layers_.push_back(layer);
     }
     
-    seq->push_back("linear3", torch::nn::Linear(torch::nn::LinearOptions(128, 256)));
-    if (nonlinearity == "relu") {
-        seq->push_back("act3", torch::nn::ReLU(torch::nn::ReLUOptions().inplace(false)));
-    } else if (nonlinearity == "elu") {
-        seq->push_back("act3", torch::nn::ELU(torch::nn::ELUOptions().inplace(false)));
-    } else if (nonlinearity == "tanh") {
-        seq->push_back("act3", torch::nn::Tanh());
-    }
-    
-    // Return as shared_ptr
-    return std::make_shared<torch::nn::Sequential>(seq);
+    return true;
 }
 
-void RLPolicyClean::_init_modules(
-    const VectorXd& obs_mean,
-    const VectorXd& obs_var,
-    std::shared_ptr<torch::nn::Sequential> encoder,
-    std::shared_ptr<torch::nn::GRU> core,
-    std::shared_ptr<torch::nn::Linear> dist_linear,
-    std::shared_ptr<torch::nn::Sequential> decoder,
-    int gru_hidden_size) {
+bool RLPolicyClean::load_gru_from_json() {
+    if (!json_parser_) return false;
+    
+    std::string w_ih_key = "core.core.weight_ih_l0";
+    std::string w_hh_key = "core.core.weight_hh_l0";
+    std::string b_ih_key = "core.core.bias_ih_l0";
+    std::string b_hh_key = "core.core.bias_hh_l0";
+    
+    std::vector<float> w_ih_data, w_hh_data, b_ih_data, b_hh_data;
+    std::vector<int> w_ih_shape, w_hh_shape, b_ih_shape, b_hh_shape;
+    
+    if (!json_parser_->extract_tensor(w_ih_key, w_ih_data, w_ih_shape) ||
+        !json_parser_->extract_tensor(w_hh_key, w_hh_data, w_hh_shape) ||
+        !json_parser_->extract_tensor(b_ih_key, b_ih_data, b_ih_shape) ||
+        !json_parser_->extract_tensor(b_hh_key, b_hh_data, b_hh_shape)) {
+        return false;
+    }
+    
+    gru_weights_.hidden_size = w_hh_shape[1];
+    gru_weights_.input_size = w_ih_shape[1];
+    
+    // Reshape weight_ih: [3*hidden, input]
+    int rows_ih = w_ih_shape[0];
+    int cols_ih = w_ih_shape[1];
+    gru_weights_.weight_ih.resize(rows_ih);
+    for (int i = 0; i < rows_ih; i++) {
+        gru_weights_.weight_ih[i].resize(cols_ih);
+        for (int j = 0; j < cols_ih; j++) {
+            gru_weights_.weight_ih[i][j] = w_ih_data[i * cols_ih + j];
+        }
+    }
+    
+    // Reshape weight_hh: [3*hidden, hidden]
+    int rows_hh = w_hh_shape[0];
+    int cols_hh = w_hh_shape[1];
+    gru_weights_.weight_hh.resize(rows_hh);
+    for (int i = 0; i < rows_hh; i++) {
+        gru_weights_.weight_hh[i].resize(cols_hh);
+        for (int j = 0; j < cols_hh; j++) {
+            gru_weights_.weight_hh[i][j] = w_hh_data[i * cols_hh + j];
+        }
+    }
+    
+    gru_weights_.bias_ih = b_ih_data;
+    gru_weights_.bias_hh = b_hh_data;
+    gru_hidden_size = gru_weights_.hidden_size;
+    
+    // Resize hxs to match the loaded hidden size
+    hxs = VectorXd::Zero(gru_hidden_size);
+    
+    // Determine input size from encoder
+    if (!encoder_layers_.empty()) {
+        gru_input_size = encoder_layers_.back().linear.out_features;
+    } else {
+        gru_input_size = gru_weights_.input_size;
+    }
+    
+    return true;
+}
 
-    this->obs_mean = obs_mean;
-    this->obs_var = obs_var;
-    this->encoder = encoder;
-    this->core = core;
-    this->dist_linear = dist_linear;
-    this->decoder = decoder;
-    this->hxs = torch::Tensor();
-    this->gru_hidden_size = gru_hidden_size;
+bool RLPolicyClean::load_dist_linear_from_json() {
+    if (!json_parser_) return false;
+    
+    std::string w_key = "action_parameterization.distribution_linear.weight";
+    std::string b_key = "action_parameterization.distribution_linear.bias";
+    
+    std::vector<float> w_data, b_data;
+    std::vector<int> w_shape, b_shape;
+    
+    if (!json_parser_->extract_tensor(w_key, w_data, w_shape) ||
+        !json_parser_->extract_tensor(b_key, b_data, b_shape)) {
+        return false;
+    }
+    
+    dist_linear_.in_features = w_shape[1];
+    dist_linear_.out_features = w_shape[0];
+    
+    // Reshape weight matrix: [out_features, in_features]
+    dist_linear_.weights.resize(w_shape[0]);
+    for (int i = 0; i < w_shape[0]; i++) {
+        dist_linear_.weights[i].resize(w_shape[1]);
+        for (int j = 0; j < w_shape[1]; j++) {
+            dist_linear_.weights[i][j] = w_data[i * w_shape[1] + j];
+        }
+    }
+    
+    dist_linear_.bias = b_data;
+    return true;
+}
+
+double RLPolicyClean::activation_func(double x, Activation act) const {
+    switch (act) {
+        case Activation::RELU:
+            return std::max(0.0, x);
+        case Activation::ELU:
+            return x > 0.0 ? x : (std::exp(x) - 1.0);
+        case Activation::TANH:
+            return std::tanh(x);
+    }
+    return x;
+}
+
+VectorXd RLPolicyClean::linear_forward(const LinearLayer& layer, const VectorXd& input) const {
+    VectorXd output(layer.out_features);
+    
+    for (int i = 0; i < layer.out_features; i++) {
+        output[i] = layer.bias[i];
+        for (int j = 0; j < layer.in_features; j++) {
+            output[i] += layer.weights[i][j] * input[j];
+        }
+    }
+    
+    return output;
+}
+
+VectorXd RLPolicyClean::encoder_forward(const VectorXd& input) const {
+    VectorXd x = input;
+    
+    for (const auto& layer : encoder_layers_) {
+        x = linear_forward(layer.linear, x);
+        for (int i = 0; i < x.size(); i++) {
+            x[i] = activation_func(x[i], layer.activation);
+        }
+    }
+    
+    return x;
+}
+
+VectorXd RLPolicyClean::normalize_obs(const VectorXd& obs) const {
+    VectorXd normalized(obs.size());
+    for (int i = 0; i < obs.size(); i++) {
+        double std_val = std::sqrt(obs_var[i] + EPS);
+        normalized[i] = (obs[i] - obs_mean[i]) / std_val;
+        normalized[i] = std::max(-5.0, std::min(5.0, normalized[i]));
+    }
+    return normalized;
+}
+
+VectorXd RLPolicyClean::gru_forward(const VectorXd& input) {
+    int hidden = gru_hidden_size;
+    
+    // Split weights into z, r, n gates (each is hidden_size rows)
+    auto get_gate_weights = [](const std::vector<std::vector<float>>& weights, int gate, int hidden_size) {
+        std::vector<std::vector<float>> gate_weights(hidden_size);
+        for (int i = 0; i < hidden_size; i++) {
+            gate_weights[i] = weights[gate * hidden_size + i];
+        }
+        return gate_weights;
+    };
+    
+    auto get_gate_bias = [](const std::vector<float>& bias, int gate, int hidden_size) {
+        std::vector<float> gate_bias(hidden_size);
+        for (int i = 0; i < hidden_size; i++) {
+            gate_bias[i] = bias[gate * hidden_size + i];
+        }
+        return gate_bias;
+    };
+    
+    // Matrix-vector multiply
+    auto matvec = [](const std::vector<std::vector<float>>& W, const VectorXd& x) {
+        VectorXd result(W.size());
+        for (size_t i = 0; i < W.size(); i++) {
+            result[i] = 0.0;
+            for (int j = 0; j < x.size(); j++) {
+                result[i] += W[i][j] * x[j];
+            }
+        }
+        return result;
+    };
+    
+    // Element-wise operations
+    auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
+    auto tanh_func = [](double x) { return std::tanh(x); };
+    
+    // Get gate weights and biases
+    // PyTorch GRU gate order is [reset, update, new]
+    auto W_r = get_gate_weights(gru_weights_.weight_ih, 0, hidden);  // RESET gate
+    auto W_z = get_gate_weights(gru_weights_.weight_ih, 1, hidden);  // UPDATE gate
+    auto W_n = get_gate_weights(gru_weights_.weight_ih, 2, hidden);  // NEW gate
+    
+    auto U_r = get_gate_weights(gru_weights_.weight_hh, 0, hidden);  // RESET gate
+    auto U_z = get_gate_weights(gru_weights_.weight_hh, 1, hidden);  // UPDATE gate
+    auto U_n = get_gate_weights(gru_weights_.weight_hh, 2, hidden);  // NEW gate
+    
+    auto b_r_ih = get_gate_bias(gru_weights_.bias_ih, 0, hidden);  // RESET gate
+    auto b_z_ih = get_gate_bias(gru_weights_.bias_ih, 1, hidden);  // UPDATE gate
+    auto b_n_ih = get_gate_bias(gru_weights_.bias_ih, 2, hidden);  // NEW gate
+    
+    auto b_r_hh = get_gate_bias(gru_weights_.bias_hh, 0, hidden);  // RESET gate
+    auto b_z_hh = get_gate_bias(gru_weights_.bias_hh, 1, hidden);  // UPDATE gate
+    auto b_n_hh = get_gate_bias(gru_weights_.bias_hh, 2, hidden);  // NEW gate
+    
+    // Current hidden state
+    VectorXd h_prev = hxs;
+    
+    // Compute gates
+    VectorXd z_t = matvec(W_z, input);
+    VectorXd r_t = matvec(W_r, input);
+    VectorXd n_t = matvec(W_n, input);
+    
+    VectorXd z_h = matvec(U_z, h_prev);
+    VectorXd r_h = matvec(U_r, h_prev);
+    VectorXd n_h = matvec(U_n, h_prev);
+    
+    // Add biases and apply activations
+    VectorXd z(hidden), r(hidden), n(hidden);
+    for (int i = 0; i < hidden; i++) {
+        z[i] = sigmoid(z_t[i] + z_h[i] + b_z_ih[i] + b_z_hh[i]);
+        r[i] = sigmoid(r_t[i] + r_h[i] + b_r_ih[i] + b_r_hh[i]);
+        // New gate: tanh(W_n @ x + b_n_ih + r * (U_n @ h + b_n_hh))
+        n[i] = tanh_func(n_t[i] + b_n_ih[i] + r[i] * (n_h[i] + b_n_hh[i]));
+    }
+    
+    // Update hidden state (PyTorch GRU formula)
+    VectorXd h_next(hidden);
+    for (int i = 0; i < hidden; i++) {
+        h_next[i] = n[i] + z[i] * (h_prev[i] - n[i]);
+    }
+    
+    hxs = h_next;
+    return h_next;
 }
 
 std::pair<VectorXd, VectorXd> RLPolicyClean::forward(
     const VectorXd& obs,
     bool normalized) {
     
-    if (!encoder || !core || !dist_linear) {
-        throw std::runtime_error("RLPolicyClean not properly initialized");
-    }
+    // Save the input hidden state BEFORE it gets updated by gru_forward
+    // This is the state that was used as input to produce the action
+    VectorXd hxs_input = hxs;
     
-    // Convert Eigen to torch tensor
-    std::vector<double> obs_vec(obs.data(), obs.data() + obs.size());
-    torch::Tensor obs_tensor = torch::from_blob(
-        obs_vec.data(),
-        {1, static_cast<long>(obs.size())},
-        torch::kFloat64
-    ).clone().to(torch::kFloat32);
+    // Normalize observation
+    VectorXd x = normalized ? obs : normalize_obs(obs);
     
-    // Normalize if needed
-    if (!normalized) {
-        std::vector<double> mean_vec(obs_mean.data(), obs_mean.data() + obs_mean.size());
-        std::vector<double> var_vec(obs_var.data(), obs_var.data() + obs_var.size());
-        
-        torch::Tensor mean_tensor = torch::from_blob(
-            mean_vec.data(),
-            {static_cast<long>(obs_mean.size())},
-            torch::kFloat64
-        ).clone().to(torch::kFloat32);
-        
-        torch::Tensor var_tensor = torch::from_blob(
-            var_vec.data(),
-            {static_cast<long>(obs_var.size())},
-            torch::kFloat64
-        ).clone().to(torch::kFloat32);
-        
-        obs_tensor = (obs_tensor - mean_tensor) / torch::sqrt(var_tensor + EPS);
-        obs_tensor = torch::clamp(obs_tensor, -5.0, 5.0);
-    }
+    // Encoder forward
+    x = encoder_forward(x);
     
-    // Encoder - Sequential is a ModuleHolder, access underlying impl with (*encoder)->
-    torch::Tensor x = (*encoder)->forward(obs_tensor);
+    // GRU forward (this updates hxs to the output state)
+    x = gru_forward(x);
     
-    // GRU expects [seq_len, batch, features]
-    x = x.unsqueeze(0);  // [batch, features] -> [1, batch, features]
+    // Distribution linear
+    VectorXd params = linear_forward(dist_linear_, x);
     
-    // Initialize hidden state if needed
-    if (!hxs.defined() || hxs.size(1) != x.size(1)) {
-        hxs = torch::zeros({1, x.size(1), gru_hidden_size}, torch::kFloat32);
-    }
+    // Split into mean and logstd, then concatenate
+    int action_dim = params.size() / 2;
+    VectorXd mean = params.head(action_dim);
+    VectorXd logstd = params.tail(action_dim);
     
-    // GRU forward - In LibTorch C++, RNN modules use operator() with input
-    // For hidden state, we need to use the module's internal state or pass it differently
-    // GRU's operator() signature: operator()(input, hidden) -> tuple<output, hidden>
-    auto gru_out = (*core)(x, hxs);
-    x = std::get<0>(gru_out);
-    torch::Tensor h_next = std::get<1>(gru_out);
-    x = x.squeeze(0);  // [1, batch, hidden] -> [batch, hidden]
+    VectorXd action_logits(params.size());
+    action_logits.head(action_dim) = mean;
+    action_logits.tail(action_dim) = logstd;
     
-    // Update hidden state
-    hxs = h_next;
-    
-    // Decoder (if present)
-    if (decoder) {
-        x = (*decoder)->forward(x);
-    }
-    
-    // Distribution parameters - Linear uses operator()
-    torch::Tensor params = (*dist_linear)(x);
-    int action_dim = params.size(1) / 2;
-    torch::Tensor mean = params.slice(1, 0, action_dim);
-    torch::Tensor logstd = params.slice(1, action_dim);
-    torch::Tensor action_logits = torch::cat({mean, logstd}, 1);
-    
-    // Convert back to Eigen
-    VectorXd action_logits_eigen(action_logits.size(1));
-    auto action_logits_cpu = action_logits.cpu();
-    auto action_logits_accessor = action_logits_cpu.accessor<float, 2>();
-    for (int i = 0; i < action_logits.size(1); i++) {
-        action_logits_eigen[i] = static_cast<double>(action_logits_accessor[0][i]);
-    }
-    
-    VectorXd h_next_eigen(h_next.size(2));
-    auto h_next_cpu = h_next.cpu();
-    auto h_next_accessor = h_next_cpu.accessor<float, 3>();
-    for (int i = 0; i < h_next.size(2); i++) {
-        h_next_eigen[i] = static_cast<double>(h_next_accessor[0][0][i]);
-    }
-    
-    return std::make_pair(action_logits_eigen, h_next_eigen);
+    // Return (action_logits, hxs_output) where hxs_output is the new state
+    // But we also need to provide access to hxs_input for logging
+    // For now, return the output state (hxs) as before
+    return std::make_pair(action_logits, hxs);
 }
 
 void RLPolicyClean::reset_hidden_state(int batch_size) {
-    if (core) {
-        hxs = torch::zeros({1, batch_size, gru_hidden_size}, torch::kFloat32);
-    }
+    (void)batch_size;  // Suppress unused parameter warning
+    hxs = VectorXd::Zero(gru_hidden_size);
 }
 
 void RLPolicyClean::set_hidden_state(const VectorXd& hxs_vec) {
-    std::vector<double> hxs_vec_data(hxs_vec.data(), hxs_vec.data() + hxs_vec.size());
-    torch::Tensor hxs_tensor = torch::from_blob(
-        hxs_vec_data.data(),
-        {1, 1, static_cast<long>(hxs_vec.size())},
-        torch::kFloat64
-    ).clone().to(torch::kFloat32);
-    hxs = hxs_tensor;
+    if (hxs_vec.size() == gru_hidden_size) {
+        hxs = hxs_vec;
+    } else {
+        std::cerr << "Warning: Hidden state size mismatch" << std::endl;
+    }
 }
 
-std::shared_ptr<RLPolicyClean> RLPolicyClean::load_from_checkpoint(
-    const std::string& path,
-    const std::string& device,
-    const std::string& nonlinearity,
-    bool jit_encoder) {
+std::shared_ptr<RLPolicyClean> RLPolicyClean::load_from_json(
+    const std::string& json_path,
+    const std::string& nonlinearity) {
     
     auto policy = std::make_shared<RLPolicyClean>();
     
-    try {
-        // Load checkpoint - PyTorch checkpoints are typically saved as IValue dictionaries
-        torch::Device torch_device(device == "cuda" ? torch::kCUDA : torch::kCPU);
-        
-        // Load checkpoint as IValue using InputArchive
-        // PyTorch checkpoints are saved as dictionaries, typically at root level
-        torch::IValue checkpoint_ivalue;
-        bool checkpoint_loaded = false;
-        try {
-            torch::serialize::InputArchive archive;
-            archive.load_from(path);
-            // Try reading with common root keys used in PyTorch checkpoints
-            // First try empty key (root), then try "model" key
-            try {
-                archive.read("", checkpoint_ivalue);
-                checkpoint_loaded = true;
-            } catch (const std::exception& e1) {
-                try {
-                    archive.read("model", checkpoint_ivalue);
-                    checkpoint_loaded = true;
-                } catch (const std::exception& e2) {
-                    // If both fail, try to read as a generic IValue
-                    // This might work for some checkpoint formats
-                    std::cerr << "Warning: Could not read checkpoint with empty or 'model' key" << std::endl;
-                    checkpoint_loaded = false;
-                }
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not load checkpoint file: " << e.what() << std::endl;
-            std::cerr << "Will use default policy structure" << std::endl;
-            checkpoint_loaded = false;
-        }
-        
-        // Extract observation normalization parameters
-        torch::Tensor obs_mean_tensor;
-        torch::Tensor obs_var_tensor;
-        
-        // Try to find keys in checkpoint
-        bool found_mean = false;
-        bool found_var = false;
-        
-        if (checkpoint_loaded && checkpoint_ivalue.isGenericDict()) {
-            // Search for keys (they might have slightly different paths)
-            auto checkpoint_dict = checkpoint_ivalue.toGenericDict();
-            for (const auto& pair : checkpoint_dict) {
-                std::string key = pair.key().toStringRef();
-                auto value = pair.value();
-                
-                if (value.isTensor()) {
-                    if (key.find("running_mean") != std::string::npos && key.find("obs") != std::string::npos) {
-                        obs_mean_tensor = value.toTensor().cpu();
-                        found_mean = true;
-                    }
-                    if (key.find("running_var") != std::string::npos && key.find("obs") != std::string::npos) {
-                        obs_var_tensor = value.toTensor().cpu();
-                        found_var = true;
-                    }
-                } else if (value.isGenericDict()) {
-                    // Check nested dictionaries (e.g., "model" key)
-                    auto nested_dict = value.toGenericDict();
-                    for (const auto& nested_pair : nested_dict) {
-                        std::string nested_key = nested_pair.key().toStringRef();
-                        if (nested_pair.value().isTensor()) {
-                            if (nested_key.find("running_mean") != std::string::npos && nested_key.find("obs") != std::string::npos) {
-                                obs_mean_tensor = nested_pair.value().toTensor().cpu();
-                                found_mean = true;
-                            }
-                            if (nested_key.find("running_var") != std::string::npos && nested_key.find("obs") != std::string::npos) {
-                                obs_var_tensor = nested_pair.value().toTensor().cpu();
-                                found_var = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        int obs_size = 4;  // Default
-        VectorXd obs_mean_vec;
-        VectorXd obs_var_vec;
-        
-        if (found_mean && found_var) {
-            obs_size = obs_mean_tensor.size(0);
-            obs_mean_vec = VectorXd(obs_size);
-            obs_var_vec = VectorXd(obs_size);
-            
-            auto mean_accessor = obs_mean_tensor.accessor<float, 1>();
-            auto var_accessor = obs_var_tensor.accessor<float, 1>();
-            for (int i = 0; i < obs_size; i++) {
-                obs_mean_vec[i] = static_cast<double>(mean_accessor[i]);
-                obs_var_vec[i] = static_cast<double>(var_accessor[i]);
-            }
-        } else {
-            // Fallback: use zeros and ones
-            obs_mean_vec = VectorXd::Zero(obs_size);
-            obs_var_vec = VectorXd::Ones(obs_size);
-        }
-        
-        // Build encoder (simplified - would parse checkpoint keys)
-        auto encoder_module = _build_encoder_from_ckpt(path, nonlinearity, jit_encoder);
-        
-        // Build GRU (would load weights from checkpoint)
-        int gru_input_size = 256;  // Would be determined from encoder output
-        int gru_hidden_size = 512;  // Would be loaded from checkpoint
-        auto core_module = std::make_shared<torch::nn::GRU>(
-            torch::nn::GRUOptions(gru_input_size, gru_hidden_size).batch_first(false));
-        
-        // Load GRU weights if available
-        // This would require parsing checkpoint keys like 'core.core.weight_ih_l0', etc.
-        
-        // Build distribution head
-        int dist_in = gru_hidden_size;
-        int num_actions = 2;  // Would be determined from checkpoint
-        auto dist_linear_module = std::make_shared<torch::nn::Linear>(
-            torch::nn::LinearOptions(dist_in, num_actions * 2));  // mean + logstd for each action
-        
-        // Load distribution weights if available
-        // This would require parsing 'action_parameterization.distribution_linear.*' keys
-        
-        policy->_init_modules(obs_mean_vec, obs_var_vec, encoder_module, 
-                            core_module, dist_linear_module, nullptr, gru_hidden_size);
-        
-    } catch (const std::exception& e) {
-        std::cerr << "Error loading checkpoint: " << e.what() << std::endl;
-        std::cerr << "Using default policy structure" << std::endl;
-        
-        // Fallback: create minimal policy
-        int obs_size = 4;
-        VectorXd obs_mean_vec = VectorXd::Zero(obs_size);
-        VectorXd obs_var_vec = VectorXd::Ones(obs_size);
-        
-        auto encoder_module = _build_encoder_from_ckpt(path, nonlinearity, jit_encoder);
-        int gru_hidden_size_fallback = 512;
-        auto core_module = std::make_shared<torch::nn::GRU>(
-            torch::nn::GRUOptions(256, gru_hidden_size_fallback).batch_first(false));
-        auto dist_linear_module = std::make_shared<torch::nn::Linear>(
-            torch::nn::LinearOptions(gru_hidden_size_fallback, 4));
-        
-        policy->_init_modules(obs_mean_vec, obs_var_vec, encoder_module, 
-                            core_module, dist_linear_module, nullptr, gru_hidden_size_fallback);
+    // Create and use SimpleJSONParser
+    policy->json_parser_ = std::make_shared<SimpleJSONParser>();
+    if (!policy->json_parser_->parse_file(json_path)) {
+        throw std::runtime_error("Failed to parse JSON file: " + json_path);
     }
     
+    // Convert nonlinearity string to enum
+    Activation act = Activation::RELU;
+    if (nonlinearity == "elu") {
+        act = Activation::ELU;
+    } else if (nonlinearity == "tanh") {
+        act = Activation::TANH;
+    }
+    
+    if (!policy->load_normalizer_from_json()) {
+        std::cerr << "Warning: Could not load normalizer, using defaults" << std::endl;
+    }
+    
+    if (!policy->build_encoder_from_json(act)) {
+        throw std::runtime_error("Error: Could not build encoder");
+    }
+    
+    if (!policy->load_gru_from_json()) {
+        throw std::runtime_error("Error: Could not load GRU");
+    }
+    
+    if (!policy->load_dist_linear_from_json()) {
+        throw std::runtime_error("Error: Could not load distribution linear");
+    }
+    
+    policy->reset_hidden_state(1);
     return policy;
 }
-

@@ -4,6 +4,6 @@
   "max_range": 15.0,
   "int_scale": 300.0,
   "max_omega": 1.5707963267948966,
-  "rlFilePathVfVr": "./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth",
-  "rlFilePathOmegaYaw": "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth"
+  "rlFilePathVfVr": "/home/valentin/RL/src/train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.json",
+  "rlFilePathOmegaYaw": "/home/valentin/RL/src/train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.json"
 }

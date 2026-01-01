@@ -4,6 +4,7 @@
 #include "general.h"
 #include <string>
 #include <memory>
+#include <vector>
 
 /**
  * JsonFile - A simple JSON parser for configuration files
@@ -68,6 +69,13 @@ public:
      * @return The Vector3d value or defaultValue
      */
     Vector3d getVector3d(const std::string& key, const Vector3d& defaultValue = Vector3d::Zero()) const;
+
+    /**
+     * Get an array of Vector3d from JSON array of arrays [[x1, y1, z1], [x2, y2, z2], ...]
+     * @param key The parameter name
+     * @return Vector of Vector3d values, empty if key not found
+     */
+    std::vector<Vector3d> getVector3dArray(const std::string& key) const;
 
     /**
      * Get a diagonal Matrix3d from JSON array [x, y, z]

@@ -103,6 +103,8 @@ private:
     
     // Scenario definitions
     Vector3d referencePoint;
+    std::vector<Vector3d> waypointList;  // List of waypoints for WAYPOINT mission type
+    double waypointReachThreshold;  // Distance threshold to consider waypoint reached (meters)
     Vector3d desiredHeadingDir_ned;
     MISSION_TYPE missionType;
     YAW_COMMAND yawControlType;
@@ -183,6 +185,8 @@ public:
                  const Vector3d& originOffset_frd = Vector3d::Zero(),
                  bool terminalHomingAlowed = true,
                  double circleRadius = 5.0,
+                 const std::vector<Vector3d>& waypointList = {},
+                 double waypointReachThreshold = 0.5,
                  CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYRL,
                  CONTROLLER_TYPE primaryControllerType = CONTROLLER_TYPE::VELOCITYRL,
                  const std::string& primaryControllerParamsFile = "",

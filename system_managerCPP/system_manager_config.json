@@ -1,11 +1,11 @@
 {
   "config_dir": "../logs/",
-  "log_dir": "config/",
+  "log_dir": "/home/valentin/RL/src/system_managerCPP/log/",
   "currentTime": -1.0,
   "dronemass": 0.55,
   "heading_dir_ned": [-1.0, 1.0, 0.0],
   "desiredHeadingDir_ned": [-1.0, 1.0, 0.0],
-  "missionType": "CIRCLE",
+  "missionType": "WAYPOINT",
   "yawControlType": "DEFINED_DIR",
   "yawCommandFactor": 1.0,
   "maximalVelocity": 0.75,
@@ -14,10 +14,17 @@
   "originOffset_frd": [0.0, 0.0, 0.0],
   "terminalHomingAlowed": true,
   "circleRadius": 5.0,
+  "waypointList": [
+    [5.0, 5.0, -2.0],
+    [10.0, 5.0, -2.0],
+    [10.0, 10.0, -2.0],
+    [5.0, 10.0, -2.0]
+  ],
+  "waypointReachThreshold": 0.5,
   "primaryControllerType": "VELOCITYRL",
-  "primaryControllerParamsFile": "velocity_rl_controller_params.json",
+  "primaryControllerParamsFile": "/home/valentin/RL/src/system_managerCPP/velocity_rl_controller_params.json",
   "secondaryControllerType":  "VELOCITYPID",
-  "secondaryControllerParamsFile": "velocity_pid_controller_params.json",
+  "secondaryControllerParamsFile": "/home/valentin/RL/src/system_managerCPP/velocity_pid_controller_params.json",
   "yawCommandType": "RATE",
   "rateControlEnabled": false
 }

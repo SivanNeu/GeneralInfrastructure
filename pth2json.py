@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Convert PyTorch .pth files to JSON format for C++ consumption.
@@ -122,7 +123,11 @@ def pth_to_json(pth_path, json_path=None):
     
     # Create output dictionary with metadata
     # Ensure all values are JSON serializable
+    # Convert to absolute path for consistency
+    pth_absolute_path = os.path.abspath(pth_path)
+    
     output = {
+        'original_pth_file': pth_absolute_path,
         'metadata': {
             'source_file': str(pth_path),
             'num_layers': int(len(weights_dict)),

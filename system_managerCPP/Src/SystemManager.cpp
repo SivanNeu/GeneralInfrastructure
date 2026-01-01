@@ -22,6 +22,8 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
                              const Vector3d& originOffset_frd,
                              bool terminalHomingAlowed,
                              double circleRadius,
+                             const std::vector<Vector3d>& waypointList,
+                             double waypointReachThreshold,
                              CONTROLLER_TYPE controllerType,
                              CONTROLLER_TYPE primaryControllerType,
                              const std::string& primaryControllerParamsFile,
@@ -39,6 +41,7 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
       heading_dir_ned(heading_dir_ned_init.normalized()),
       homingStage(HOMING_STAGE::NONE), pointIndex(0), offboardEntry(false),
       referencePoint(Vector3d::Zero()),
+      waypointList(waypointList), waypointReachThreshold(waypointReachThreshold),
       desiredHeadingDir_ned(desiredHeadingDir_ned),
       missionType(missionType),
       yawControlType(yawControlType),
@@ -55,6 +58,22 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
       _last_invalid_cmd_warning(0), _last_cmd_send_debug_time(0), _cmd_send_count(0) {
     
     std::cout << "System_Manager: Initializing..." << std::endl;
+    
+    // Initialize waypoint list if provided
+    if (!waypointList.empty()) {
+        std::cout << "System_Manager: Loaded " << waypointList.size() << " waypoints" << std::endl;
+        for (size_t i = 0; i < waypointList.size(); i++) {
+            std::cout << "  Waypoint " << i << ": [" << waypointList[i].transpose() << "]" << std::endl;
+        }
+        std::cout << "  Waypoint reach threshold: " << waypointReachThreshold << " m" << std::endl;
+        // Set initial waypoint
+        if (pointIndex < static_cast<int>(waypointList.size())) {
+            referencePoint = waypointList[pointIndex];
+            std::cout << "  Initial waypoint (index " << pointIndex << "): [" << referencePoint.transpose() << "]" << std::endl;
+        }
+    } else {
+        std::cout << "System_Manager: No waypoint list provided, using hold position" << std::endl;
+    }
     
     // Initialize controllers with parameters from JSON files
     // Use primaryControllerType (which falls back to controllerType in main.cpp if not specified)
@@ -242,6 +261,27 @@ std::tuple<std::vector<bool>, std::tuple<Vector3d, Vector3d, Vector3d>,
         }
     } else if (yawControlType == YAW_COMMAND::DEFINED_DIR) {
         heading_dir_ned = desiredHeadingDir_ned;
+    }
+    
+    // Check if current waypoint is reached (for WAYPOINT mission type)
+    if (missionType == MISSION_TYPE::WAYPOINT && !waypointList.empty()) {
+        Vector3d pos_ned = _currentData.pos_ned_m.ned;
+        Vector3d currentWaypoint = holdonPos_ned.value() + referencePoint;
+        Vector3d deltaPos = currentWaypoint - pos_ned;
+        double distanceToWaypoint = deltaPos.norm();
+        
+        // If waypoint is reached, advance to next waypoint
+        if (distanceToWaypoint < waypointReachThreshold) {
+            if (waypointList.size() > 1) {
+                pointIndex = (pointIndex + 1) % waypointList.size();
+                referencePoint = waypointList[pointIndex];
+                std::cout << "System_Manager: Waypoint reached! Advancing to waypoint " << pointIndex 
+                          << " [" << referencePoint.transpose() << "]" << std::endl;
+            } else {
+                // Single waypoint - stay at it
+                std::cout << "System_Manager: Waypoint reached! (single waypoint mission)" << std::endl;
+            }
+        }
     }
     
     Vector3d missionPoint = holdonPos_ned.value() + referencePoint;
@@ -802,9 +842,13 @@ void SystemManager::gatherData() {
                     // TODO: Handle integral term logic when controller methods are available
                     
                     if (offboardEntry && missionType == MISSION_TYPE::WAYPOINT) {
-                        // TODO: Handle pointList when available
-                        // pointIndex = (pointIndex + 1) % pointList.size();
-                        // referencePoint = pointList[pointIndex];
+                        // When entering offboard mode, set initial waypoint if waypoint list is available
+                        if (!waypointList.empty()) {
+                            pointIndex = 0;  // Start from first waypoint
+                            referencePoint = waypointList[pointIndex];
+                            std::cout << "System_Manager: Offboard entry - Setting initial waypoint " << pointIndex 
+                                      << " [" << referencePoint.transpose() << "]" << std::endl;
+                        }
                         offboardEntry = false;
                     }
                 }

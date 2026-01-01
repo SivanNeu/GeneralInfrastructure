@@ -5,8 +5,6 @@
 set -e  # Exit on error
 
 BUILD_TYPE="${1:-Release}"
-USE_LIBTORCH="${2:-ON}"
-LIBTORCH_PATH="${3:-}"
 
 # Validate build type
 if [[ ! "$BUILD_TYPE" =~ ^(Debug|Release|RelWithDebInfo|MinSizeRel)$ ]]; then
@@ -17,18 +15,14 @@ fi
 
 echo "Building SystemManagerCPP..."
 echo "Build type: $BUILD_TYPE"
-echo "Use LibTorch: $USE_LIBTORCH"
+echo "Note: RLPolicyClean uses JSON-based inference (no LibTorch required)"
 
 # Create build directory
 mkdir -p build
 cd build
 
 # Configure CMake
-CMAKE_ARGS="-DCMAKE_BUILD_TYPE=$BUILD_TYPE -DUSE_LIBTORCH=$USE_LIBTORCH"
-
-if [ ! -z "$LIBTORCH_PATH" ]; then
-    CMAKE_ARGS="$CMAKE_ARGS -DCMAKE_PREFIX_PATH=$LIBTORCH_PATH"
-fi
+CMAKE_ARGS="-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
 
 cmake .. $CMAKE_ARGS
 

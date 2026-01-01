@@ -18,6 +18,10 @@
 // class RLPolicyClean;
 
 struct VelocityRLControllerParameters {
+    // Default file paths for RL policies
+    static constexpr const char* DEFAULT_RL_FILE_VFVR = "./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.json";
+    static constexpr const char* DEFAULT_RL_FILE_OMEGAYAW = "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.json";
+    
     double mass;
     double max_vel;
     double max_range;
@@ -58,6 +62,12 @@ private:
     // RL Policies
     std::shared_ptr<RLPolicyClean> rl_policyVfVr;
     std::shared_ptr<RLPolicyClean> rl_policyOmegaYaw;
+    
+    // Action distribution parameters (mean and logstd)
+    Eigen::VectorXd mean_vfvr;
+    Eigen::VectorXd logstd_vfvr;
+    Eigen::VectorXd mean_yaw;
+    Eigen::VectorXd logstd_yaw;
 
 public:
     VelocityRLController(double mass = 0.5, double maximalVelocity = 3.0, double currentTime = 0.0);
@@ -77,6 +87,15 @@ public:
     
     // RL policy inference
     std::pair<Eigen::Vector2d, double> rl_inference(const Eigen::Vector4d& obsXY, const Eigen::Vector2d& obsHeading);
+    
+    // Get hidden states from both policies (for logging)
+    std::pair<Eigen::VectorXd, Eigen::VectorXd> get_hidden_states() const;
+    
+    // Get action distribution parameters (mean and logstd)
+    std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd> get_action_distribution() const;
+    
+    // Get policy file paths
+    std::pair<std::string, std::string> get_policy_file_paths() const;
 };
 
 #endif // VELOCITY_RL_CONTROLLER_H

@@ -101,16 +101,16 @@ class System_Manager():
         self.desiredHeadingDir_ned = np.array([-1, 1, 0])
         # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
         
-        self.missionType = MISSION_TYPE.WAYPOINT    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
         self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
         
         self.yawCommandFactor = 1        
-        self.maximalVelocity = 0.75*factor # m/s (horizontal)
+        self.maximalVelocity = 10*factor # m/s (horizontal)
         self.descentVelocity = 10
         self.targetVelocity = 0.75*10
         self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
         self.terminalHomingAlowed = True 
-        self.circleRadius = 5*factor
+        self.circleRadius = 15*factor
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
         self.yawCommandType = YAW_COMMAND_TYPE.RATE
         

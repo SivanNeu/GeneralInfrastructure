@@ -9,8 +9,8 @@
 VelocityRLControllerParameters::VelocityRLControllerParameters(double mass) 
     : mass(mass), max_vel(3.0), max_range(15.0), int_scale(300.0), 
       max_omega(M_PI / 2.0),
-      rlFilePathVfVr("./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth"),
-      rlFilePathOmegaYaw("./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth") {
+      rlFilePathVfVr(DEFAULT_RL_FILE_VFVR),
+      rlFilePathOmegaYaw(DEFAULT_RL_FILE_OMEGAYAW) {
 }
 
 VelocityRLControllerParameters VelocityRLControllerParameters::loadFromJSON(const std::string& jsonFilePath) {
@@ -29,8 +29,8 @@ VelocityRLControllerParameters VelocityRLControllerParameters::loadFromJSON(cons
     params.max_range = json.getDouble("max_range", 15.0);
     params.int_scale = json.getDouble("int_scale", 300.0);
     params.max_omega = json.getDouble("max_omega", M_PI / 2.0);
-    params.rlFilePathVfVr = json.getString("rlFilePathVfVr", "./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth");
-    params.rlFilePathOmegaYaw = json.getString("rlFilePathOmegaYaw", "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth");
+    params.rlFilePathVfVr = json.getString("rlFilePathVfVr", VelocityRLControllerParameters::DEFAULT_RL_FILE_VFVR);
+    params.rlFilePathOmegaYaw = json.getString("rlFilePathOmegaYaw", VelocityRLControllerParameters::DEFAULT_RL_FILE_OMEGAYAW);
     
     std::cout << "Loaded RL controller parameters from: " << jsonFilePath << std::endl;
     return params;
@@ -52,17 +52,19 @@ VelocityRLController::VelocityRLController(const VelocityRLControllerParameters&
       max_omega(params.max_omega), 
       ringLen(1), ringV(Eigen::MatrixXd::Zero(2, ringLen)),
       ringIndex(0), ringAverage(Eigen::Vector2d::Zero()), param(params),
-      rl_policyVfVr(nullptr), rl_policyOmegaYaw(nullptr) {
-    // RL policy loading from parameters
+      rl_policyVfVr(nullptr), rl_policyOmegaYaw(nullptr),
+      mean_vfvr(Eigen::VectorXd::Zero(0)), logstd_vfvr(Eigen::VectorXd::Zero(0)),
+      mean_yaw(Eigen::VectorXd::Zero(0)), logstd_yaw(Eigen::VectorXd::Zero(0)) {
+    // RL policy loading from parameters (JSON files created by pth2json.py)
     try {
         if (!params.rlFilePathVfVr.empty()) {
             std::cout << "Loading RL policy from: " << params.rlFilePathVfVr << std::endl;
-            rl_policyVfVr = RLPolicyClean::load_from_checkpoint(params.rlFilePathVfVr, "cpu", "relu", false);
+            rl_policyVfVr = RLPolicyClean::load_from_json(params.rlFilePathVfVr, "relu");
         }
         
         if (!params.rlFilePathOmegaYaw.empty()) {
             std::cout << "Loading RL policy from: " << params.rlFilePathOmegaYaw << std::endl;
-            rl_policyOmegaYaw = RLPolicyClean::load_from_checkpoint(params.rlFilePathOmegaYaw, "cpu", "relu", false);
+            rl_policyOmegaYaw = RLPolicyClean::load_from_json(params.rlFilePathOmegaYaw, "relu");
         }
     } catch (const std::exception& e) {
         std::cerr << "Warning: Failed to load RL policies: " << e.what() << std::endl;
@@ -159,35 +161,68 @@ std::pair<Eigen::Vector2d, double> VelocityRLController::rl_inference(const Eige
             Eigen::VectorXd obsHeading_vec(2);
             obsHeading_vec << obsHeading[0], obsHeading[1];
             
-            // Forward pass through policies
+            // Forward pass through policies (this updates the hidden states)
             auto [action_logits_vfvr, hxs_vfvr] = rl_policyVfVr->forward(obsXY_vec, false);
             auto [action_logits_yaw, hxs_yaw] = rl_policyOmegaYaw->forward(obsHeading_vec, false);
             
             // Extract mean and logstd (action_logits contains [mean, logstd] concatenated)
             int action_dim = action_logits_vfvr.size() / 2;
-            Eigen::VectorXd mean_vfvr = action_logits_vfvr.head(action_dim);
-            Eigen::VectorXd logstd_vfvr = action_logits_vfvr.tail(action_dim);
+            mean_vfvr = action_logits_vfvr.head(action_dim);
+            logstd_vfvr = action_logits_vfvr.tail(action_dim);
             
             // Sample or use mean (for deterministic, use mean)
             vf_vr[0] = mean_vfvr[0];
             vf_vr[1] = mean_vfvr[1];
             
             int yaw_action_dim = action_logits_yaw.size() / 2;
-            Eigen::VectorXd mean_yaw = action_logits_yaw.head(yaw_action_dim);
+            mean_yaw = action_logits_yaw.head(yaw_action_dim);
+            logstd_yaw = action_logits_yaw.tail(yaw_action_dim);
             w = mean_yaw[0];
             
         } catch (const std::exception& e) {
             std::cerr << "Error in RL inference: " << e.what() << std::endl;
             // Fallback to zeros
+            mean_vfvr = Eigen::VectorXd::Zero(0);
+            logstd_vfvr = Eigen::VectorXd::Zero(0);
+            mean_yaw = Eigen::VectorXd::Zero(0);
+            logstd_yaw = Eigen::VectorXd::Zero(0);
             vf_vr = Eigen::Vector2d::Zero();
             w = 0.0;
         }
     } else {
         // Policies not loaded - return zeros
+        mean_vfvr = Eigen::VectorXd::Zero(0);
+        logstd_vfvr = Eigen::VectorXd::Zero(0);
+        mean_yaw = Eigen::VectorXd::Zero(0);
+        logstd_yaw = Eigen::VectorXd::Zero(0);
         vf_vr = Eigen::Vector2d::Zero();
         w = 0.0;
     }
     
     return std::make_pair(vf_vr, w);
 }
+
+std::pair<Eigen::VectorXd, Eigen::VectorXd> VelocityRLController::get_hidden_states() const {
+    Eigen::VectorXd hxs_vfvr = Eigen::VectorXd::Zero(0);
+    Eigen::VectorXd hxs_yaw = Eigen::VectorXd::Zero(0);
+    
+    if (rl_policyVfVr) {
+        hxs_vfvr = rl_policyVfVr->get_hidden_state();
+    }
+    
+    if (rl_policyOmegaYaw) {
+        hxs_yaw = rl_policyOmegaYaw->get_hidden_state();
+    }
+    
+    return std::make_pair(hxs_vfvr, hxs_yaw);
+}
+
+std::tuple<Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd, Eigen::VectorXd> VelocityRLController::get_action_distribution() const {
+    return std::make_tuple(mean_vfvr, logstd_vfvr, mean_yaw, logstd_yaw);
+}
+
+std::pair<std::string, std::string> VelocityRLController::get_policy_file_paths() const {
+    return std::make_pair(param.rlFilePathVfVr, param.rlFilePathOmegaYaw);
+}
+
 

@@ -9,6 +9,19 @@
 #include <sstream>
 #include <iomanip>
 #include <map>
+#include <fstream>
+#ifdef __has_include
+    #if __has_include(<filesystem>)
+        #include <filesystem>
+        namespace fs = std::filesystem;
+    #else
+        #include <experimental/filesystem>
+        namespace fs = std::experimental::filesystem;
+    #endif
+#else
+    #include <filesystem>
+    namespace fs = std::filesystem;
+#endif
 
 // Guidance is now defined in Control.h
 
@@ -80,6 +93,42 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
         std::make_tuple(b1d_ned, b1d_dot, b1d_ddot)
     );
     
+    // Check if we should start logging (before processing observation to save correct hxs state)
+    bool should_start_logging = log_data && !_control_logger;
+    std::string log_name;  // Declare outside if block so it's accessible later
+    
+    // Determine controller type to get name (needed for both hxs saving and logger creation)
+    // We'll determine it properly when we call getCommand below, but for now try to get the name
+    CONTROLLER_TYPE temp_controllerType = CONTROLLER_TYPE::VELOCITYPID;
+    std::string temp_controller_name = "unknown";
+    
+    // Try to determine controller type without processing observation
+    // Note: static_cast doesn't throw, so we check the actual type by calling getControllerType
+    VelocityPIDController* pid_controller = static_cast<VelocityPIDController*>(controlnode);
+    VelocityRLController* rl_controller = static_cast<VelocityRLController*>(controlnode);
+    
+    // Try PID first - check if it's actually a PID controller
+    if (pid_controller != nullptr) {
+        CONTROLLER_TYPE test_type = pid_controller->getControllerType();
+        if (test_type == CONTROLLER_TYPE::VELOCITYPID) {
+            temp_controllerType = CONTROLLER_TYPE::VELOCITYPID;
+            temp_controller_name = pid_controller->getControllerName();
+        }
+    }
+    
+    // If not PID, try RL
+    if (temp_controller_name == "unknown" && rl_controller != nullptr) {
+        CONTROLLER_TYPE test_type = rl_controller->getControllerType();
+        if (test_type == CONTROLLER_TYPE::VELOCITYRL) {
+            temp_controllerType = CONTROLLER_TYPE::VELOCITYRL;
+            temp_controller_name = rl_controller->getControllerName();
+        }
+    }
+    
+    if (should_start_logging) {
+        log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + temp_controller_name;
+    }
+    
     // Get command from controller - need to cast based on controller type
     Vector3d f_total;
     Matrix3d R_desired;
@@ -89,34 +138,45 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYPID;
     std::string controller_name = "unknown";
     
-    // Try to determine controller type and call appropriate method
-    // This would be better with a base Controller interface
-    try {
-        VelocityPIDController* pid_controller = static_cast<VelocityPIDController*>(controlnode);
-        controllerType = pid_controller->getControllerType();
-        controller_name = pid_controller->getControllerName();
-        auto result = pid_controller->getCommand(currentBodyState, desiredBodyState, controlType_use, &currentData);
-        f_total = std::get<0>(result);
-        R_desired = std::get<1>(result);
-        Omega_desired_frd = std::get<2>(result);
-        obs = std::get<3>(result);
-    } catch (...) {
-        try {
-            VelocityRLController* rl_controller = static_cast<VelocityRLController*>(controlnode);
-            controllerType = rl_controller->getControllerType();
+    // Determine controller type and call appropriate method
+    // Use getControllerType() to determine the actual controller type
+    // (pid_controller and rl_controller are already declared above)
+    
+    // Check PID controller first
+    if (pid_controller != nullptr) {
+        CONTROLLER_TYPE test_type = pid_controller->getControllerType();
+        if (test_type == CONTROLLER_TYPE::VELOCITYPID) {
+            controllerType = CONTROLLER_TYPE::VELOCITYPID;
+            controller_name = pid_controller->getControllerName();
+            auto result = pid_controller->getCommand(currentBodyState, desiredBodyState, controlType_use, &currentData);
+            f_total = std::get<0>(result);
+            R_desired = std::get<1>(result);
+            Omega_desired_frd = std::get<2>(result);
+            obs = std::get<3>(result);
+        }
+    }
+    
+    // If not PID, try RL controller
+    if (controller_name == "unknown" && rl_controller != nullptr) {
+        CONTROLLER_TYPE test_type = rl_controller->getControllerType();
+        if (test_type == CONTROLLER_TYPE::VELOCITYRL) {
+            controllerType = CONTROLLER_TYPE::VELOCITYRL;
             controller_name = rl_controller->getControllerName();
+            
             auto result = rl_controller->getCommand(currentBodyState, desiredBodyState, controlType_use, &currentData);
             f_total = std::get<0>(result);
             R_desired = std::get<1>(result);
             Omega_desired_frd = std::get<2>(result);
             obs = std::get<3>(result);
-        } catch (...) {
-            // Fallback - would need other controller types
-            f_total = Vector3d::Zero();
-            R_desired = Matrix3d::Identity();
-            Omega_desired_frd = Vector3d::Zero();
-            obs = Eigen::VectorXd::Zero(9);
         }
+    }
+    
+    // Fallback if no controller type was determined
+    if (controller_name == "unknown") {
+        f_total = Vector3d::Zero();
+        R_desired = Matrix3d::Identity();
+        Omega_desired_frd = Vector3d::Zero();
+        obs = Eigen::VectorXd::Zero(9);
     }
     
     Vector3d command;
@@ -146,23 +206,79 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
     Quaternion quat_ned_desbodyfrd = Quaternion::from_matrix(R_desired);
     Vector3d rpyRate_cmd = Omega_desired_frd;
     
+    // Handle control logger (depends on log_data flag)
     if (!log_data) {
-        // Close logger when leaving OFFBOARD mode
+        // Close control logger when leaving OFFBOARD mode
         if (_control_logger) {
             _control_logger->close();
             _control_logger.reset();
         }
-    } else if (log_data && !_control_logger) {
-        std::string log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + controller_name;
-        _control_logger = std::make_unique<Logger>(log_name, log_directory, true, false, "CSV");
+    } else {
+        // Create or ensure loggers exist when logging is enabled
+        // Use the log_name we already created (or create it if not set)
+        if (log_name.empty()) {
+            log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + controller_name;
+        }
+        
+        // Create control logger if it doesn't exist
+        if (!_control_logger) {
+            _control_logger = std::make_unique<Logger>(log_name, log_directory, true, false, "CSV");
+        }
     }
     
+    // Handle RL loggers independently (always create/maintain if RL controller is active)
+    if (controllerType == CONTROLLER_TYPE::VELOCITYRL) {
+        VelocityRLController* rl_controller = static_cast<VelocityRLController*>(controlnode);
+        if (rl_controller) {
+            // Ensure log_name is set for RL loggers
+            if (log_name.empty()) {
+                log_name = TimeUtils::get_unique_datetime_str() + "_control_logs_" + controller_name;
+            }
+            
+            auto [vfvr_path, yaw_path] = rl_controller->get_policy_file_paths();
+            
+            std::string rl_log_name_vfvr = log_name + "_rl_vfvr";
+            std::string rl_log_name_yaw = log_name + "_rl_yaw";
+            
+            // Create vfvr logger if it doesn't exist
+            if (!_rl_logger_vfvr) {
+                _rl_logger_vfvr = std::make_unique<Logger>(rl_log_name_vfvr, log_directory, true, false, "CSV");
+                write_rl_log_metadata(_rl_logger_vfvr.get(), vfvr_path);
+            }
+            
+            // Create yaw logger if it doesn't exist
+            if (!_rl_logger_yaw) {
+                _rl_logger_yaw = std::make_unique<Logger>(rl_log_name_yaw, log_directory, true, false, "CSV");
+                write_rl_log_metadata(_rl_logger_yaw.get(), yaw_path);
+            }
+        }
+    } else {
+        // If not RL controller, close RL loggers if they exist
+        if (_rl_logger_vfvr) {
+            _rl_logger_vfvr->close();
+            _rl_logger_vfvr.reset();
+        }
+        if (_rl_logger_yaw) {
+            _rl_logger_yaw->close();
+            _rl_logger_yaw.reset();
+        }
+    }
+    
+    // Log control data if enabled
     if (log_data && _control_logger) {
         log_control_data(command, rpyRate_cmd, quat_ned_desbodyfrd, Omega_desired_frd,
                         _current_pos_ned, _current_vel_ned, gyro_ned, accel_ned,
                         quat_ned_bodyfrd, imu_ts, step_dt, current_ts, counter,
                         estimated_tar_pos_ned, vel_des_ned, obs, currentData.custom_mode_id,
                         currentData.timestamp / 1000.0);
+    }
+    
+    // Log RL-specific data independently (runs whenever RL loggers exist)
+    if (controllerType == CONTROLLER_TYPE::VELOCITYRL && _rl_logger_vfvr && _rl_logger_yaw) {
+        VelocityRLController* rl_controller = static_cast<VelocityRLController*>(controlnode);
+        if (rl_controller) {
+            logRL(rl_controller, f_total, Omega_desired_frd, obs, currentData.timestamp / 1000.0);
+        }
     }
     
     return std::make_tuple(command, rpyRate_cmd, quat_ned_desbodyfrd);
@@ -374,6 +490,178 @@ void Control::log_control_data(const Vector3d& command, const Vector3d& rpy_rate
     
     if (_control_logger) {
         _control_logger->log(logDict);
+    }
+}
+
+void Control::write_rl_log_metadata(Logger* logger, const std::string& policy_file_path) {
+    if (!logger) {
+        return;
+    }
+    
+    // Write metadata as a comment line (CSV comment convention)
+    std::string metadata = "# policy_file: " + policy_file_path + "\n";
+    logger->write(metadata);
+}
+
+void Control::logRL(VelocityRLController* rl_controller, const Vector3d& f_total, const Vector3d& Omega_desired_frd,
+                    const Eigen::VectorXd& obs, double timestamp) {
+    if (!rl_controller || !_rl_logger_vfvr || !_rl_logger_yaw) {
+        return;
+    }
+    
+    try {
+        // Get action distribution (mean and logstd)
+        auto [mean_vfvr, logstd_vfvr, mean_yaw, logstd_yaw] = rl_controller->get_action_distribution();
+        
+        // Get hidden states
+        auto [hxs_vfvr, hxs_yaw] = rl_controller->get_hidden_states();
+        
+        // Extract actions: X (vf), Y (vr), yaw (w)
+        double action_x = f_total[0];  // vf
+        double action_y = f_total[1];  // vr
+        double action_yaw = Omega_desired_frd[2];  // w
+        
+        // Extract observations: obsXY (4 values) and obsHeading (2 values)
+        // obs contains [obsXY[0], obsXY[1], obsXY[2], obsXY[3], obsHeading[0], obsHeading[1]]
+        Eigen::Vector4d obsXY = Eigen::Vector4d::Zero();
+        Eigen::Vector2d obsHeading = Eigen::Vector2d::Zero();
+        
+        if (obs.size() >= 6) {
+            obsXY << obs[0], obs[1], obs[2], obs[3];
+            obsHeading << obs[4], obs[5];
+        }
+        
+        // Build log dictionary
+        std::map<std::string, std::string> logDict;
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(10);
+        
+        // Timestamp
+        oss.str("");
+        oss << timestamp;
+        logDict["timestamp"] = oss.str();
+        
+        // Actions
+        oss.str("");
+        oss << action_x;
+        logDict["action/x"] = oss.str();
+        oss.str("");
+        oss << action_y;
+        logDict["action/y"] = oss.str();
+        oss.str("");
+        oss << action_yaw;
+        logDict["action/yaw"] = oss.str();
+        
+        // Action distribution for vfvr
+        for (int i = 0; i < mean_vfvr.size(); i++) {
+            oss.str("");
+            oss << mean_vfvr[i];
+            logDict["mean_vfvr/" + std::to_string(i)] = oss.str();
+        }
+        for (int i = 0; i < logstd_vfvr.size(); i++) {
+            oss.str("");
+            oss << logstd_vfvr[i];
+            logDict["logstd_vfvr/" + std::to_string(i)] = oss.str();
+        }
+        
+        // Action distribution for yaw
+        for (int i = 0; i < mean_yaw.size(); i++) {
+            oss.str("");
+            oss << mean_yaw[i];
+            logDict["mean_yaw/" + std::to_string(i)] = oss.str();
+        }
+        for (int i = 0; i < logstd_yaw.size(); i++) {
+            oss.str("");
+            oss << logstd_yaw[i];
+            logDict["logstd_yaw/" + std::to_string(i)] = oss.str();
+        }
+        
+        // Observations for vfvr network (obsXY)
+        for (int i = 0; i < obsXY.size(); i++) {
+            oss.str("");
+            oss << obsXY[i];
+            logDict["obsXY/" + std::to_string(i)] = oss.str();
+        }
+        
+        // Observations for yaw network (obsHeading)
+        for (int i = 0; i < obsHeading.size(); i++) {
+            oss.str("");
+            oss << obsHeading[i];
+            logDict["obsHeading/" + std::to_string(i)] = oss.str();
+        }
+        
+        // Hidden states for vfvr network
+        for (int i = 0; i < hxs_vfvr.size(); i++) {
+            oss.str("");
+            oss << hxs_vfvr[i];
+            logDict["hxs_vfvr/" + std::to_string(i)] = oss.str();
+        }
+        
+        // Build separate log dictionaries for vfvr and yaw
+        // Note: We'll add hxs last to ensure it appears at the end of the CSV row
+        std::map<std::string, std::string> logDict_vfvr;
+        std::map<std::string, std::string> logDict_yaw;
+        
+        // Common fields
+        logDict_vfvr["timestamp"] = logDict["timestamp"];
+        logDict_yaw["timestamp"] = logDict["timestamp"];
+        
+        // Vfvr-specific data (add in order: action, mean, logstd, obs, then hxs last)
+        logDict_vfvr["action/x"] = logDict["action/x"];
+        logDict_vfvr["action/y"] = logDict["action/y"];
+        for (int i = 0; i < mean_vfvr.size(); i++) {
+            logDict_vfvr["mean/" + std::to_string(i)] = logDict["mean_vfvr/" + std::to_string(i)];
+        }
+        for (int i = 0; i < logstd_vfvr.size(); i++) {
+            logDict_vfvr["logstd/" + std::to_string(i)] = logDict["logstd_vfvr/" + std::to_string(i)];
+        }
+        for (int i = 0; i < obsXY.size(); i++) {
+            logDict_vfvr["obs/" + std::to_string(i)] = logDict["obsXY/" + std::to_string(i)];
+        }
+        // Write hxs_vfvr directly from the vector (add last to ensure it's at the end)
+        // Use zero-padded indices so alphabetical sorting matches numerical sorting
+        // Calculate number of digits needed for zero-padding
+        int hxs_vfvr_max_idx = hxs_vfvr.size() > 0 ? static_cast<int>(hxs_vfvr.size() - 1) : 0;
+        int hxs_vfvr_digits = hxs_vfvr_max_idx > 0 ? static_cast<int>(std::floor(std::log10(static_cast<double>(hxs_vfvr_max_idx))) + 1) : 1;
+        for (int i = 0; i < hxs_vfvr.size(); i++) {
+            oss.str("");
+            oss << hxs_vfvr[i];
+            // Format index with zero-padding for proper numerical sorting
+            std::ostringstream idx_oss;
+            idx_oss << std::setfill('0') << std::setw(hxs_vfvr_digits) << i;
+            logDict_vfvr["z_hxs/" + idx_oss.str()] = oss.str();
+        }
+        
+        // Yaw-specific data (add in order: action, mean, logstd, obs, then hxs last)
+        logDict_yaw["action/yaw"] = logDict["action/yaw"];
+        for (int i = 0; i < mean_yaw.size(); i++) {
+            logDict_yaw["mean/" + std::to_string(i)] = logDict["mean_yaw/" + std::to_string(i)];
+        }
+        for (int i = 0; i < logstd_yaw.size(); i++) {
+            logDict_yaw["logstd/" + std::to_string(i)] = logDict["logstd_yaw/" + std::to_string(i)];
+        }
+        for (int i = 0; i < obsHeading.size(); i++) {
+            logDict_yaw["obs/" + std::to_string(i)] = logDict["obsHeading/" + std::to_string(i)];
+        }
+        // Write hxs_yaw directly from the vector (add last to ensure it's at the end)
+        // Use zero-padded indices so alphabetical sorting matches numerical sorting
+        int hxs_yaw_max_idx = hxs_yaw.size() > 0 ? static_cast<int>(hxs_yaw.size() - 1) : 0;
+        int hxs_yaw_digits = hxs_yaw_max_idx > 0 ? static_cast<int>(std::floor(std::log10(static_cast<double>(hxs_yaw_max_idx))) + 1) : 1;
+        for (int i = 0; i < hxs_yaw.size(); i++) {
+            oss.str("");
+            oss << hxs_yaw[i];
+            // Format index with zero-padding for proper numerical sorting
+            std::ostringstream idx_oss;
+            idx_oss << std::setfill('0') << std::setw(hxs_yaw_digits) << i;
+            logDict_yaw["z_hxs/" + idx_oss.str()] = oss.str();
+        }
+        
+        // Write to separate loggers
+        _rl_logger_vfvr->log(logDict_vfvr);
+        _rl_logger_yaw->log(logDict_yaw);
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Warning: Exception while logging RL data: " << e.what() << std::endl;
     }
 }
 

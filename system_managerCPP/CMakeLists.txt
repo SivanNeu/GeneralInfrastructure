@@ -51,6 +51,7 @@ set(UTILS_SOURCES
     Src/utils/Imu.cpp
     Src/utils/JsonFile.cpp
     Src/utils/LLA.cpp
+    Src/utils/SimpleJSONParser.cpp
     Src/utils/Logger.cpp
     Src/utils/LowPassFilter.cpp
     Src/utils/NED.cpp
@@ -99,60 +100,7 @@ else()
 endif()
 
 # Build options
-option(USE_LIBTORCH "Build with LibTorch support for RLPolicyClean" ON)
 option(USE_SANITIZERS "Enable address and undefined behavior sanitizers in Debug mode" OFF)
-option(LIBTORCH_PATH "Path to LibTorch installation" "/opt/libtorch")
-
-if(USE_LIBTORCH)
-    # First try the default path /opt/libtorch
-    if(EXISTS "${LIBTORCH_PATH}/share/cmake/Torch/TorchConfig.cmake")
-        set(CMAKE_PREFIX_PATH "${LIBTORCH_PATH}" ${CMAKE_PREFIX_PATH})
-        message(STATUS "Using LibTorch from default path: ${LIBTORCH_PATH}")
-    endif()
-    
-    # Try to find Torch package
-    find_package(Torch QUIET)
-    
-    # If not found, try common alternative locations
-    if(NOT Torch_FOUND)
-        set(LIBTORCH_SEARCH_PATHS
-            "/opt/libtorch"
-            "/usr/local/libtorch"
-            "$ENV{HOME}/libtorch"
-            "${CMAKE_SOURCE_DIR}/third_party/libtorch"
-            "${CMAKE_SOURCE_DIR}/../libtorch"
-        )
-        
-        foreach(SEARCH_PATH ${LIBTORCH_SEARCH_PATHS})
-            if(EXISTS "${SEARCH_PATH}/share/cmake/Torch/TorchConfig.cmake")
-                set(CMAKE_PREFIX_PATH "${SEARCH_PATH}" ${CMAKE_PREFIX_PATH})
-                message(STATUS "Trying LibTorch from: ${SEARCH_PATH}")
-                find_package(Torch QUIET)
-                if(Torch_FOUND)
-                    break()
-                endif()
-            endif()
-        endforeach()
-    endif()
-    
-    if(Torch_FOUND)
-        message(STATUS "LibTorch found: ${TORCH_INSTALL_PREFIX}")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
-    else()
-        message(WARNING "LibTorch not found. RLPolicyClean will not work properly.")
-        message(WARNING "Searched in:")
-        message(WARNING "  - ${LIBTORCH_PATH} (default)")
-        foreach(SEARCH_PATH ${LIBTORCH_SEARCH_PATHS})
-            message(WARNING "  - ${SEARCH_PATH}")
-        endforeach()
-        message(WARNING "To use LibTorch, download from https://pytorch.org/get-started/locally/")
-        message(WARNING "and either:")
-        message(WARNING "  1. Place it in /opt/libtorch, or")
-        message(WARNING "  2. Set CMAKE_PREFIX_PATH to the LibTorch installation directory, or")
-        message(WARNING "  3. Set LIBTORCH_PATH variable: cmake -DLIBTORCH_PATH=/path/to/libtorch ..")
-        set(USE_LIBTORCH OFF)
-    endif()
-endif()
 
 # Create library
 add_library(SystemManagerLib STATIC ${ALL_SOURCES})
@@ -197,11 +145,7 @@ target_include_directories(SystemManagerLib
     ${ZMQ_INCLUDE_DIRS}
 )
 
-# Link LibTorch if available
-if(USE_LIBTORCH AND Torch_FOUND)
-    target_link_libraries(SystemManagerLib PUBLIC ${TORCH_LIBRARIES})
-    target_compile_definitions(SystemManagerLib PUBLIC USE_LIBTORCH)
-endif()
+# RLPolicyClean now uses pure C++ JSON-based inference (no LibTorch required)
 
 # Compiler-specific options
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -305,10 +249,7 @@ message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "Eigen3: ${EIGEN3_INCLUDE_DIR}")
 message(STATUS "ZeroMQ: ${ZMQ_LIBRARIES}")
-message(STATUS "LibTorch: ${USE_LIBTORCH}")
-if(USE_LIBTORCH AND Torch_FOUND)
-    message(STATUS "  LibTorch path: ${TORCH_INSTALL_PREFIX}")
-endif()
+message(STATUS "RLPolicyClean: JSON-based inference (no LibTorch required)")
 message(STATUS "=====================================================")
 message(STATUS "")
 message(STATUS "To build Debug version: cmake -DCMAKE_BUILD_TYPE=Debug ..")

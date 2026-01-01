@@ -29,6 +29,8 @@ struct ConfigParams {
     Vector3d originOffset_frd = Vector3d::Zero();
     bool terminalHomingAlowed = true;
     double circleRadius = 5.0;
+    std::vector<Vector3d> waypointList;  // List of waypoints for WAYPOINT mission type
+    double waypointReachThreshold = 0.5;  // Distance threshold to consider waypoint reached (meters)
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYRL;
     CONTROLLER_TYPE primaryControllerType = CONTROLLER_TYPE::VELOCITYRL;
     std::string primaryControllerParamsFile;
@@ -116,6 +118,10 @@ ConfigParams parseConfigFile(const std::string& config_path) {
     params.heading_dir_ned = json.getVector3d("heading_dir_ned", Vector3d(-1, 1, 0));
     params.desiredHeadingDir_ned = json.getVector3d("desiredHeadingDir_ned", Vector3d(-1, 1, 0));
     params.originOffset_frd = json.getVector3d("originOffset_frd", Vector3d::Zero());
+    
+    // Extract waypoint list (array of Vector3d)
+    params.waypointList = json.getVector3dArray("waypointList");
+    params.waypointReachThreshold = json.getDouble("waypointReachThreshold", 0.5);
     
     // Extract boolean values
     params.terminalHomingAlowed = json.getBool("terminalHomingAlowed", true);
@@ -251,6 +257,13 @@ int main(int argc, char* argv[]) {
             std::cout << "  originOffset_frd: [" << config.originOffset_frd.transpose() << "]" << std::endl;
             std::cout << "  terminalHomingAlowed: " << (config.terminalHomingAlowed ? "true" : "false") << std::endl;
             std::cout << "  circleRadius: " << config.circleRadius << std::endl;
+            std::cout << "  waypointList size: " << config.waypointList.size() << std::endl;
+            if (!config.waypointList.empty()) {
+                for (size_t i = 0; i < config.waypointList.size(); i++) {
+                    std::cout << "    waypoint[" << i << "]: [" << config.waypointList[i].transpose() << "]" << std::endl;
+                }
+            }
+            std::cout << "  waypointReachThreshold: " << config.waypointReachThreshold << std::endl;
             std::cout << "  controllerType: " << static_cast<int>(config.controllerType) << std::endl;
             std::cout << "  primaryControllerType: " << static_cast<int>(config.primaryControllerType) << std::endl;
             std::cout << "  primaryControllerParamsFile: " << config.primaryControllerParamsFile << std::endl;
@@ -274,6 +287,8 @@ int main(int argc, char* argv[]) {
                             config.originOffset_frd,
                             config.terminalHomingAlowed,
                             config.circleRadius,
+                            config.waypointList,
+                            config.waypointReachThreshold,
                             config.controllerType,
                             config.primaryControllerType,
                             config.primaryControllerParamsFile,
