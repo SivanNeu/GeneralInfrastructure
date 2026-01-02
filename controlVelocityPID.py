@@ -31,11 +31,56 @@ class VelocityPIDControllerParameters:
         self.keYawRate = 0.01
         self.keYawIntegral = 1.0*0
         self.sat_sigmaYaw = 3
+    
+    @staticmethod
+    def load_from_json(json_file_path):
+        """
+        Load parameters from JSON file.
+        
+        Args:
+            json_file_path: Path to JSON file containing controller parameters
+            
+        Returns:
+            VelocityPIDControllerParameters object with loaded values
+        """
+        import json
+        params = VelocityPIDControllerParameters()
+        try:
+            with open(json_file_path, 'r') as f:
+                config = json.load(f)
+            params.mass = config.get('mass', 0.5)
+            # Load diagonal matrices from lists
+            kX_list = config.get('kX', [2.0, 2.0, 2.0])
+            params.kX = np.diag(kX_list) if isinstance(kX_list, list) else np.diag([kX_list]*3)
+            kV_list = config.get('kV', [0.0, 0.0, 0.0])
+            params.kV = np.diag(kV_list) if isinstance(kV_list, list) else np.diag([kV_list]*3)
+            kIX_list = config.get('kIX', [0.0, 0.0, 0.0])
+            params.kIX = np.diag(kIX_list) if isinstance(kIX_list, list) else np.diag([kIX_list]*3)
+            kIV_list = config.get('kIV', [0.0, 0.0, 0.0])
+            params.kIV = np.diag(kIV_list) if isinstance(kIV_list, list) else np.diag([kIV_list]*3)
+            params.c1 = config.get('c1', 1.0)
+            params.sat_sigmaX = config.get('sat_sigmaX', 3.0)
+            params.sat_sigmaV = config.get('sat_sigmaV', 3.0)
+            params.keYaw = config.get('keYaw', 1.0)
+            params.keYawRate = config.get('keYawRate', 0.01)
+            params.keYawIntegral = config.get('keYawIntegral', 0.0)
+            params.sat_sigmaYaw = config.get('sat_sigmaYaw', 3.0)
+            print(f"Loaded PID controller parameters from: {json_file_path}")
+        except FileNotFoundError:
+            print(f"Warning: Could not load controller parameter file: {json_file_path}")
+            print("  Using default parameters")
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in controller parameter file: {e}")
+            print("  Using default parameters")
+        except Exception as e:
+            print(f"Error loading controller parameter file: {e}")
+            print("  Using default parameters")
+        return params
         
 ###############################################################################################################
 class VelocityPIDController:
 
-    def __init__(self, mass, currentTime=None, yawCommandType=YAW_COMMAND_TYPE.NONE):
+    def __init__(self, mass, currentTime=None, yawCommandType=YAW_COMMAND_TYPE.NONE, params=None, params_file=None):
 
         self.controllerName = "VelocityPID"
         self.controllerType = CONTROLLER_TYPE.VELOCITYPID
@@ -51,7 +96,13 @@ class VelocityPIDController:
 
         self.A = np.zeros((3, 3))
 
-        self.param = VelocityPIDControllerParameters(mass=mass)
+        # Load parameters from file if provided, otherwise use params object or defaults
+        if params_file is not None:
+            self.param = VelocityPIDControllerParameters.load_from_json(params_file)
+        elif params is not None:
+            self.param = params
+        else:
+            self.param = VelocityPIDControllerParameters(mass=mass)
 
             # controller
         # Control errors

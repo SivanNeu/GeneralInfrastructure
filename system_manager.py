@@ -24,6 +24,8 @@ import zmqWrapper
 import zmqTopics
 import pickle
 import struct
+import json
+import argparse
 # from Filter.AllInOneKalman import AllInOneKalman
 # from virtual_tracker import Tracker
 
@@ -61,7 +63,7 @@ GOAL_LOOP_FREQ_HZ = 50
 GPS_SEARCH_TIMEOUT_SEC = 3
 #################################################################################################################
 class System_Manager():
-    def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False, currentTime=None):
+    def __init__(self, config_dir, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False, currentTime=None, config_dict=None):
         print("System_Manager: Initializing...")
         self._overall_start = time.monotonic() if currentTime is None else currentTime
         self._config_dir = config_dir
@@ -93,33 +95,49 @@ class System_Manager():
         self.pointIndex = 0
         self.offboardEntry = False
         
-        ##############################
-        # start scenario definitions #
-        ##############################
-        factor = 1
-        self.referencePoint = np.array([ 0, 0, 0])
-        self.desiredHeadingDir_ned = np.array([-1, 1, 0])
-        # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
+        # Initialize controller parameter file paths (will be set from config if provided)
+        self.primaryControllerParamsFile = None
+        self.secondaryControllerParamsFile = None
         
-        self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
-        self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
+        # Load configuration from JSON if provided, otherwise use defaults
+        if config_dict is not None:
+            self._load_config_from_dict(config_dict)
+        else:
+            # Use default parameters (preserve original code exactly)
+            ##############################
+            # start scenario definitions #
+            ##############################
+            factor = 1
+            self.referencePoint = np.array([ 0, 0, 0])
+            self.desiredHeadingDir_ned = np.array([-1, 1, 0])
+            # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
+            
+            self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
+            self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
+            
+            self.yawCommandFactor = 1        
+            self.maximalVelocity = 10*factor # m/s (horizontal)
+            self.descentVelocity = 10
+            self.targetVelocity = 0.75*10
+            self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
+            self.terminalHomingAlowed = True 
+            self.circleRadius = 15*factor
+            self.controllerType = CONTROLLER_TYPE.VELOCITYRL
+            self.yawCommandType = YAW_COMMAND_TYPE.RATE
+            self.rateControlEnabled = False
         
-        self.yawCommandFactor = 1        
-        self.maximalVelocity = 10*factor # m/s (horizontal)
-        self.descentVelocity = 10
-        self.targetVelocity = 0.75*10
-        self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
-        self.terminalHomingAlowed = True 
-        self.circleRadius = 15*factor
-        self.controllerType = CONTROLLER_TYPE.VELOCITYRL
-        self.yawCommandType = YAW_COMMAND_TYPE.RATE
-        
+        # Initialize controllers based on controller type (preserve original code)
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
-            self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, currentTime=self._overall_start), maximalVelocity=self.maximalVelocity)
+            # Use parameter file if available (from JSON config), otherwise use defaults
+            aux_params_file = self.secondaryControllerParamsFile if hasattr(self, 'secondaryControllerParamsFile') and self.secondaryControllerParamsFile else None
+            main_params_file = self.primaryControllerParamsFile if hasattr(self, 'primaryControllerParamsFile') and self.primaryControllerParamsFile else None
+            self._controlAux = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, currentTime=self._overall_start, params_file=aux_params_file), maximalVelocity=self.maximalVelocity)
             # self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass), maximalVelocity=self.maximalVelocity)
-            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity, currentTime=self._overall_start)) 
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityRLController(mass=self.dronemass, maximalVelocity=self.maximalVelocity, currentTime=self._overall_start, params_file=main_params_file)) 
         elif self.controllerType == CONTROLLER_TYPE.VELOCITYPID:
-            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, yawCommandType=self.yawCommandType), maximalVelocity=self.maximalVelocity)
+            # Use parameter file if available (from JSON config), otherwise use defaults
+            main_params_file = self.primaryControllerParamsFile if hasattr(self, 'primaryControllerParamsFile') and self.primaryControllerParamsFile else None
+            self._controlMain = Control(self._config_dir, self._log_dir, controller=VelocityPIDController(mass=self.dronemass, yawCommandType=self.yawCommandType, params_file=main_params_file), maximalVelocity=self.maximalVelocity)
             
         # self._control = Control(self._config_dir, self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=GeometricController(mass=self.dronemass))
@@ -127,7 +145,6 @@ class System_Manager():
         # self._control = Control(self._config_dir, self._log_dir, controller=JaeyoungController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=BrescianiniController(mass=self.dronemass))
         # self._control = Control(self._config_dir, self._log_dir, controller=KooijmanController(mass=self.dronemass))
-        self.rateControlEnabled = False
         
         ###############################
         # end of scenario definitions #
@@ -169,6 +186,94 @@ class System_Manager():
         vehicle_config_file_name =  system_config_parser.get_value("vehicle_config_file", default_value="")
         vehicle_config_path = os.path.join(self._config_dir,"vehicle", vehicle_config_file_name)
         return vehicle_config_path
+
+#################################################################################################################
+    def _load_config_from_dict(self, config_dict):
+        """
+        Load configuration parameters from a dictionary (typically loaded from JSON).
+        
+        Args:
+            config_dict: Dictionary containing configuration parameters
+        """
+        # Load values from JSON config
+        factor = 1
+        self.referencePoint = np.array(config_dict.get('referencePoint', [0, 0, 0]))
+        self.desiredHeadingDir_ned = np.array(config_dict.get('desiredHeadingDir_ned', [-1, 1, 0]))
+        # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
+        if 'waypointList' in config_dict:
+            self.pointList = np.array(config_dict['waypointList'])
+        
+        # Parse mission type from string
+        mission_type_str = config_dict.get('missionType', 'CIRCLE')
+        mission_type_map = {
+            'NONE': MISSION_TYPE.NONE,
+            'WAYPOINT': MISSION_TYPE.WAYPOINT,
+            'VELOCITY': MISSION_TYPE.VELOCITY,
+            'CIRCLE': MISSION_TYPE.CIRCLE,
+            'LISSAJOUS': MISSION_TYPE.LISSAJOUS,
+            'TRACKER': MISSION_TYPE.TRACKER,
+            'SECTION': MISSION_TYPE.SECTION,
+            'SPINNING': MISSION_TYPE.SPINNING
+        }
+        self.missionType = mission_type_map.get(mission_type_str.upper(), MISSION_TYPE.CIRCLE)
+        
+        # Parse yaw control type from string
+        yaw_control_str = config_dict.get('yawControlType', 'DEFINED_DIR')
+        yaw_control_map = {
+            'NO_CONTROL': YAW_COMMAND.NO_CONTROL,
+            'DEFINED_DIR': YAW_COMMAND.DEFINED_DIR,
+            'HOLD_CUR_DIR': YAW_COMMAND.HOLD_CUR_DIR,
+            'VELOCITY_DIR': YAW_COMMAND.VELOCITY_DIR,
+            'CAMERA_DIR': YAW_COMMAND.CAMERA_DIR
+        }
+        self.yawControlType = yaw_control_map.get(yaw_control_str.upper(), YAW_COMMAND.DEFINED_DIR)
+        
+        self.yawCommandFactor = config_dict.get('yawCommandFactor', 1)
+        self.maximalVelocity = config_dict.get('maximalVelocity', 10*factor)
+        self.descentVelocity = config_dict.get('descentVelocity', 10)
+        self.targetVelocity = config_dict.get('targetVelocity', 0.75*10)
+        self.originOffset_frd = np.array(config_dict.get('originOffset_frd', [0, 0, 0]))
+        self.terminalHomingAlowed = config_dict.get('terminalHomingAlowed', True)
+        self.circleRadius = config_dict.get('circleRadius', 15*factor)
+        
+        # Parse controller type from string
+        controller_type_str = config_dict.get('primaryControllerType', 'VELOCITYRL')
+        controller_type_map = {
+            'VELOCITYPID': CONTROLLER_TYPE.VELOCITYPID,
+            'VELOCITYRL': CONTROLLER_TYPE.VELOCITYRL,
+            'ACCELERATIONPID': CONTROLLER_TYPE.ACCELERATIONPID,
+            'GEOMETRIC': CONTROLLER_TYPE.GEOMETRIC,
+            'ADAPTIVEGEOMETRIC': CONTROLLER_TYPE.ADAPTIVEGEOMETRIC,
+            'JAEYOUNG': CONTROLLER_TYPE.JAEYOUNG,
+            'BRESCIANINI': CONTROLLER_TYPE.BRESCIANINI,
+            'KOOIJMAN': CONTROLLER_TYPE.KOOIJMAN
+        }
+        self.controllerType = controller_type_map.get(controller_type_str.upper(), CONTROLLER_TYPE.VELOCITYRL)
+        
+        # Parse yaw command type from string
+        yaw_cmd_type_str = config_dict.get('yawCommandType', 'RATE')
+        yaw_cmd_type_map = {
+            'NONE': YAW_COMMAND_TYPE.NONE,
+            'ANGLE': YAW_COMMAND_TYPE.ANGLE,
+            'RATE': YAW_COMMAND_TYPE.RATE
+        }
+        self.yawCommandType = yaw_cmd_type_map.get(yaw_cmd_type_str.upper(), YAW_COMMAND_TYPE.RATE)
+        
+        # Update config_dir and log_dir if provided in config
+        if 'config_dir' in config_dict:
+            self._config_dir = config_dict['config_dir']
+        if 'log_dir' in config_dict:
+            self._log_dir = config_dict['log_dir']
+        
+        # Update dronemass if provided
+        if 'dronemass' in config_dict:
+            self.dronemass = config_dict['dronemass']
+        
+        self.rateControlEnabled = config_dict.get('rateControlEnabled', False)
+        
+        # Store controller parameter file paths for later use in controller initialization
+        self.primaryControllerParamsFile = config_dict.get('primaryControllerParamsFile', None)
+        self.secondaryControllerParamsFile = config_dict.get('secondaryControllerParamsFile', None)
 
 #################################################################################################################
     def _log_input_data(self,   current_ts, imu_ts,
@@ -965,6 +1070,33 @@ def quad_sim(t, Ts, quad, ctrl, wind, traj):
     return t
 ############################################################################################################################
 
+def load_config_from_json(json_file_path):
+    """
+    Load configuration from JSON file.
+    
+    Args:
+        json_file_path: Path to JSON configuration file
+        
+    Returns:
+        Dictionary with configuration parameters, or None if file doesn't exist
+    """
+    try:
+        with open(json_file_path, 'r') as f:
+            config = json.load(f)
+        print(f"System_Manager: Loaded configuration from {json_file_path}")
+        return config
+    except FileNotFoundError:
+        print(f"System_Manager: Warning - Config file not found: {json_file_path}")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"System_Manager: Error - Invalid JSON in config file: {e}")
+        return None
+    except Exception as e:
+        print(f"System_Manager: Error loading config file: {e}")
+        return None
+
+############################################################################################################################
+
 def main():
     import sys
     sys.stdout.flush()  # Ensure output is flushed immediately
@@ -972,8 +1104,32 @@ def main():
     print("System_Manager starting...")
     print("=" * 60)
     sys.stdout.flush()
+    
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='System Manager for quadcopter control')
+    parser.add_argument('--config', '-c', type=str, default=None,
+                        help='Path to JSON configuration file (if not provided, uses default parameters)')
+    parser.add_argument('config_file', nargs='?', type=str, default=None,
+                        help='Path to JSON configuration file (positional argument, alternative to --config)')
+    args = parser.parse_args()
+    
+    # Load configuration from JSON if provided (check both --config flag and positional argument)
+    config_dict = None
+    config_file_path = args.config or args.config_file
+    if config_file_path:
+        config_dict = load_config_from_json(config_file_path)
+        if config_dict is None:
+            print("System_Manager: Failed to load config file, using default parameters")
+    
     if REAL_TIME:
-        sysMgr = System_Manager(log_dir='../logs/', config_dir='config/')
+        # Use config_dir and log_dir from config if available, otherwise use defaults
+        config_dir = config_dict.get('config_dir', 'config/') if config_dict else 'config/'
+        log_dir = config_dict.get('log_dir', '../logs/') if config_dict else '../logs/'
+        current_time = config_dict.get('currentTime') if config_dict and 'currentTime' in config_dict else None
+        # Only pass currentTime if it's not -1 (which seems to be a sentinel value)
+        if current_time is not None and current_time < 0:
+            current_time = None
+        sysMgr = System_Manager(log_dir=log_dir, config_dir=config_dir, currentTime=current_time, config_dict=config_dict)
         print("System_Manager initialized. Starting main loop...")
         print("System_Manager: Waiting for flight data from hardware_adapter...")
         print("System_Manager: If you see '-return-0-' messages, hardware_adapter may not be publishing data")
@@ -1005,7 +1161,14 @@ def main():
             endTime = time.monotonic()
             # print("Computation Time",endTime-startTime)
     else:
-        sysMgr = System_Manager(log_dir='../logs/', config_dir='config/', currentTime=0)
+        # Use config_dir and log_dir from config if available, otherwise use defaults
+        config_dir = config_dict.get('config_dir', 'config/') if config_dict else 'config/'
+        log_dir = config_dict.get('log_dir', '../logs/') if config_dict else '../logs/'
+        current_time = config_dict.get('currentTime', 0) if config_dict else 0
+        # Only use currentTime if it's >= 0, otherwise use 0
+        if current_time < 0:
+            current_time = 0
+        sysMgr = System_Manager(log_dir=log_dir, config_dir=config_dir, currentTime=current_time, config_dict=config_dict)
         # Add the Simulation directory to the path (relative to this file's location)
         simulation_path = os.path.join(os.path.dirname(__file__), 'Quadcopter_SimCon', 'Simulation')
         sys.path.append(simulation_path)

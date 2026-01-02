@@ -61,8 +61,6 @@ private:
     
     Vector3d _accel_cmd_ned;
     std::unique_ptr<Logger> _control_logger;
-    std::unique_ptr<Logger> _rl_logger_vfvr;
-    std::unique_ptr<Logger> _rl_logger_yaw;
     
     double _last_pitch_update;
     bool _finished_stationary_tracking;
@@ -73,13 +71,6 @@ private:
     std::optional<Vector3d> prev_los_ned_dir;
     
     std::unique_ptr<Guidance> _guidance;
-    
-    // Helper function to log RL-specific data (actions, observations, hidden states)
-    void logRL(VelocityRLController* rl_controller, const Vector3d& f_total, const Vector3d& Omega_desired_frd,
-               const Eigen::VectorXd& obs, double timestamp);
-    
-    // Helper function to write metadata to log file
-    void write_rl_log_metadata(Logger* logger, const std::string& policy_file_path);
 
 public:
     Control(const std::string& config_dir, const std::string& log_directory, 

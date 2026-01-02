@@ -1,4 +1,5 @@
 import time
+import os
 import numpy as np
 # import torch
 from common import CONTROLLER_TYPE
@@ -14,11 +15,52 @@ from math import sin, cos, pi, sqrt, atan2
 class VelocityRLControllerParameters:
     def __init__(self, mass=0.5):
         self.mass = mass  # Mass of the rover (kg)
+        self.max_vel = 3.0
+        self.max_range = 15.0
+        self.int_scale = 300.0
+        self.max_omega = np.deg2rad(90)
+        self.rlFilePathVfVr = None
+        self.rlFilePathOmegaYaw = None
+    
+    @staticmethod
+    def load_from_json(json_file_path):
+        """
+        Load parameters from JSON file.
+        
+        Args:
+            json_file_path: Path to JSON file containing controller parameters
+            
+        Returns:
+            VelocityRLControllerParameters object with loaded values
+        """
+        import json
+        params = VelocityRLControllerParameters()
+        try:
+            with open(json_file_path, 'r') as f:
+                config = json.load(f)
+            params.mass = config.get('mass', 0.5)
+            params.max_vel = config.get('max_vel', 3.0)
+            params.max_range = config.get('max_range', 15.0)
+            params.int_scale = config.get('int_scale', 300.0)
+            params.max_omega = config.get('max_omega', np.deg2rad(90))
+            params.rlFilePathVfVr = config.get('rlFilePathVfVr', None)
+            params.rlFilePathOmegaYaw = config.get('rlFilePathOmegaYaw', None)
+            print(f"Loaded RL controller parameters from: {json_file_path}")
+        except FileNotFoundError:
+            print(f"Warning: Could not load controller parameter file: {json_file_path}")
+            print("  Using default parameters")
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in controller parameter file: {e}")
+            print("  Using default parameters")
+        except Exception as e:
+            print(f"Error loading controller parameter file: {e}")
+            print("  Using default parameters")
+        return params
    
 ###############################################################################################################
 class VelocityRLController:
 
-    def __init__(self, mass=0.5, maximalVelocity=3.0, currentTime=None):
+    def __init__(self, mass=0.5, maximalVelocity=3.0, currentTime=None, params=None, params_file=None):
 
         self.controllerName = "VelocityRL"
         self.controllerType = CONTROLLER_TYPE.VELOCITYRL
@@ -32,38 +74,74 @@ class VelocityRLController:
         self.pos_target = [0.0,0.0,0.0]
         self.heading_target = [0.0,0.0,0.0]
 
-        self.max_vel = maximalVelocity
-        # Position integral scale
-        self.max_range = 15
-        self.int_scale = self.max_range * 20  # 20sec
+        # Load parameters from file if provided, otherwise use params object or defaults
+        if params_file is not None:
+            self.param = VelocityRLControllerParameters.load_from_json(params_file)
+        elif params is not None:
+            self.param = params
+        else:
+            self.param = VelocityRLControllerParameters(mass=mass)
 
-        self.max_omega = np.deg2rad(90)
+        # Use parameters from param object
+        self.max_vel = maximalVelocity if maximalVelocity is not None else self.param.max_vel
+        self.max_range = self.param.max_range
+        self.int_scale = self.param.int_scale if self.param.int_scale > 0 else (self.max_range * 20)
+        self.max_omega = self.param.max_omega
         
         self.ringLen = 1
         self.ringV = np.zeros((2,self.ringLen))
         self.ringIndex = 0
         self.ringAverage = np.zeros(2)
 
-        self.param = VelocityRLControllerParameters(mass=mass)
-
         # policy network setup
+        # Use paths from parameters if available, otherwise use defaults
+        if self.param.rlFilePathVfVr is not None:
+            rlFilePathVfVr = self.param.rlFilePathVfVr
+        else:
+            rlFilePathVfVr = './train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth'
         
-        # sf_enjoy = SF_Enjoy_main()
-        # self.sf_policy = sf_enjoy.enjoy
+        if self.param.rlFilePathOmegaYaw is not None:
+            rlFilePathOmegaYaw = self.param.rlFilePathOmegaYaw
+        else:
+            rlFilePathOmegaYaw = './train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth'
         
-        rlFilePathVfVr = './train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth'
-        # rlFilePathOmegaYaw = './train_dir/rlcat_yaw/checkpoint_p0/best_000000441_451584_reward_-76.342.pth' #slow control
-        rlFilePathOmegaYaw = './train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth' #fast control
-        # rlFilePathOmegaYaw = './train_dir/train_yaw_new_parameters_tan_reward/checkpoint_p0/best_000008770_8980480_reward_781.952.pth' #tan fast control
         print("Loading RL policy from: "+rlFilePathVfVr)
         print("Loading RL policy from: "+rlFilePathOmegaYaw)
         time.sleep(0.5)
-        # self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/gazebo_quad_no_int/checkpoint_p0/best_000001173_1201152_reward_295.335.pth')
-        # self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path='./train_dir/yaw_quad_tan_reward/checkpoint_p0/best_000005102_5224448_reward_324571.330.pth')
-        # self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/rlcat_quad_int/checkpoint_p0/best_000002056_2105344_reward_124.010.pth')
         
-        self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path=rlFilePathVfVr)
-        self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path=rlFilePathOmegaYaw)
+        # Try to load from .pth file first, if .json is provided, try to find corresponding .pth
+        try:
+            if rlFilePathVfVr.endswith('.json'):
+                # Try to find corresponding .pth file
+                pth_path = rlFilePathVfVr.replace('.json', '.pth')
+                if os.path.exists(pth_path):
+                    rlFilePathVfVr = pth_path
+                    print(f"Using .pth file instead: {pth_path}")
+                else:
+                    # If .pth doesn't exist, try loading from JSON (if supported)
+                    # For now, fall back to default .pth path
+                    print(f"Warning: .pth file not found for {rlFilePathVfVr}, using default")
+                    rlFilePathVfVr = './train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth'
+            
+            if rlFilePathOmegaYaw.endswith('.json'):
+                # Try to find corresponding .pth file
+                pth_path = rlFilePathOmegaYaw.replace('.json', '.pth')
+                if os.path.exists(pth_path):
+                    rlFilePathOmegaYaw = pth_path
+                    print(f"Using .pth file instead: {pth_path}")
+                else:
+                    # If .pth doesn't exist, try loading from JSON (if supported)
+                    # For now, fall back to default .pth path
+                    print(f"Warning: .pth file not found for {rlFilePathOmegaYaw}, using default")
+                    rlFilePathOmegaYaw = './train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth'
+            
+            self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path=rlFilePathVfVr)
+            self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path=rlFilePathOmegaYaw)
+        except Exception as e:
+            print(f"Error loading RL policies: {e}")
+            print("Using default RL policy paths")
+            self.rl_policyVfVr     = RLPolicyClean.load_from_checkpoint(path='./train_dir/rlcat2_quad/checkpoint_p0/best_000003172_3248128_reward_176.079.pth')
+            self.rl_policyOmegaYaw = RLPolicyClean.load_from_checkpoint(path='./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth')
        
 ###############################################################################################################
     def getCommand(self, currentBodyState, desiredBodyState, controlType=None, currentData=None):
