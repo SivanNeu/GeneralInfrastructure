@@ -15,10 +15,15 @@ OBJ_DIR = obj
 OBJ_DIR_DEBUG = obj_debug
 BIN_DIR = bin
 
-# Source files (exclude example files)
-SOURCES = $(filter-out $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
-OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
-OBJECTS_DEBUG = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR_DEBUG)/%.o)
+# Source files for UDP adapter (exclude Serial adapter, Serial main, and example files)
+UDP_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterSerial.c $(SRC_DIR)/mainSerial.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
+UDP_OBJECTS = $(UDP_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+UDP_OBJECTS_DEBUG = $(UDP_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR_DEBUG)/%.o)
+
+# Source files for Serial adapter (exclude UDP adapter, UDP main, and example files)
+SERIAL_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterUDP.c $(SRC_DIR)/mainUDP.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
+SERIAL_OBJECTS = $(SERIAL_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
+SERIAL_OBJECTS_DEBUG = $(SERIAL_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR_DEBUG)/%.o)
 
 # Example source files
 UDP_EXAMPLE_SRC = $(SRC_DIR)/udp_example.c
@@ -26,13 +31,15 @@ UDP_EXAMPLE_OBJ = $(OBJ_DIR)/udp_example.o
 UDP_EXAMPLE_OBJ_DEBUG = $(OBJ_DIR_DEBUG)/udp_example.o
 
 # Target executables
-TARGET = $(BIN_DIR)/hardware_adapterUDP
-TARGET_DEBUG = $(BIN_DIR)/hardware_adapterUDP
+UDP_TARGET = $(BIN_DIR)/hardware_adapterUDP
+UDP_TARGET_DEBUG = $(BIN_DIR)/hardware_adapterUDP
+SERIAL_TARGET = $(BIN_DIR)/hardware_adapterSerial
+SERIAL_TARGET_DEBUG = $(BIN_DIR)/hardware_adapterSerial
 UDP_EXAMPLE_TARGET = $(BIN_DIR)/udp_example
 UDP_EXAMPLE_TARGET_DEBUG = $(BIN_DIR)/udp_example_debug
 
-# Default target
-all: $(TARGET)
+# Default target (build both)
+all: $(UDP_TARGET) $(SERIAL_TARGET)
 
 # Create directories
 $(OBJ_DIR):
@@ -41,25 +48,38 @@ $(OBJ_DIR):
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-# Build target
-$(TARGET): $(OBJECTS) | $(BIN_DIR)
-	$(CC) $(OBJECTS) -o $@ $(LDFLAGS)
+# Build UDP target
+$(UDP_TARGET): $(UDP_OBJECTS) | $(BIN_DIR)
+	$(CC) $(UDP_OBJECTS) -o $@ $(LDFLAGS)
+	@echo "Build complete: $@"
+
+# Build Serial target
+$(SERIAL_TARGET): $(SERIAL_OBJECTS) | $(BIN_DIR)
+	$(CC) $(SERIAL_OBJECTS) -o $@ $(LDFLAGS)
 	@echo "Build complete: $@"
 
 # Compile source files
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Debug build target
-debug: $(TARGET_DEBUG)
+# Debug build targets
+debug: $(UDP_TARGET_DEBUG) $(SERIAL_TARGET_DEBUG)
+
+debug-udp: $(UDP_TARGET_DEBUG)
+
+debug-serial: $(SERIAL_TARGET_DEBUG)
 
 # Create debug directories
 $(OBJ_DIR_DEBUG):
 	mkdir -p $(OBJ_DIR_DEBUG)
 
-# Build debug target
-$(TARGET_DEBUG): $(OBJECTS_DEBUG) | $(BIN_DIR)
-	$(CC) $(OBJECTS_DEBUG) -o $@ $(DEBUG_LDFLAGS)
+# Build debug targets
+$(UDP_TARGET_DEBUG): $(UDP_OBJECTS_DEBUG) | $(BIN_DIR)
+	$(CC) $(UDP_OBJECTS_DEBUG) -o $@ $(DEBUG_LDFLAGS)
+	@echo "Debug build complete: $@"
+
+$(SERIAL_TARGET_DEBUG): $(SERIAL_OBJECTS_DEBUG) | $(BIN_DIR)
+	$(CC) $(SERIAL_OBJECTS_DEBUG) -o $@ $(DEBUG_LDFLAGS)
 	@echo "Debug build complete: $@"
 
 # Compile debug source files
@@ -104,13 +124,15 @@ install-deps:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all              - Build the hardware adapter (optimized, default)"
-	@echo "  debug            - Build the hardware adapter with debug symbols"
+	@echo "  all              - Build both UDP and Serial adapters (optimized, default)"
+	@echo "  debug            - Build both adapters with debug symbols"
+	@echo "  debug-udp        - Build UDP adapter with debug symbols"
+	@echo "  debug-serial     - Build Serial adapter with debug symbols"
 	@echo "  udp-example      - Build the UDP example (optimized)"
 	@echo "  udp-example-debug - Build the UDP example with debug symbols"
 	@echo "  clean            - Remove build artifacts"
 	@echo "  install-deps     - Install required dependencies"
 	@echo "  help             - Show this help message"
 
-.PHONY: all debug udp-example udp-example-debug clean install-deps help
+.PHONY: all debug debug-udp debug-serial udp-example udp-example-debug clean install-deps help
 

@@ -1,3 +1,4 @@
+#define _DEFAULT_SOURCE
 #include "zmq_wrapper.h"
 #include "zmq_topics.h"
 #include <stdio.h>
