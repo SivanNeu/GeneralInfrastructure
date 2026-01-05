@@ -73,7 +73,7 @@ private:
     std::unique_ptr<Guidance> _guidance;
 
 public:
-    Control(const std::string& config_dir, const std::string& log_directory, 
+    Control(const std::string& log_directory, 
             void* controller, double maximalVelocity = MAXIMALVELOCITY);
     
     std::tuple<Vector3d, Vector3d, Quaternion> get_cmd(

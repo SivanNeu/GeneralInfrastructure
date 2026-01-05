@@ -31,13 +31,40 @@ std::string JsonFile::stripComments(const std::string& rawContent) {
     std::string line;
     
     while (std::getline(stream, line)) {
-        // Find // comment marker
-        size_t commentPos = line.find("//");
-        if (commentPos != std::string::npos) {
-            // Remove everything after //
-            line = line.substr(0, commentPos);
+        std::string cleaned_line;
+        bool in_string = false;
+        bool escape_next = false;
+        
+        for (size_t i = 0; i < line.length(); ++i) {
+            char c = line[i];
+            
+            if (escape_next) {
+                cleaned_line += c;
+                escape_next = false;
+                continue;
+            }
+            
+            if (c == '\\') {
+                cleaned_line += c;
+                escape_next = true;
+                continue;
+            }
+            
+            if (c == '"') {
+                in_string = !in_string;
+                cleaned_line += c;
+                continue;
+            }
+            
+            // If we encounter // and we're not in a string, remove rest of line
+            if (!in_string && i < line.length() - 1 && line[i] == '/' && line[i+1] == '/') {
+                break;
+            }
+            
+            cleaned_line += c;
         }
-        result << line;
+        
+        result << cleaned_line;
         if (!stream.eof()) {
             result << "\n";
         }

@@ -15,13 +15,13 @@ OBJ_DIR = obj
 OBJ_DIR_DEBUG = obj_debug
 BIN_DIR = bin
 
-# Source files for UDP adapter (exclude Serial adapter, Serial main, and example files)
-UDP_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterSerial.c $(SRC_DIR)/mainSerial.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
+# Source files for UDP adapter (exclude Serial adapter, Serial main, regular main, and example files)
+UDP_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterSerial.c $(SRC_DIR)/mainSerial.c $(SRC_DIR)/main.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
 UDP_OBJECTS = $(UDP_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 UDP_OBJECTS_DEBUG = $(UDP_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR_DEBUG)/%.o)
 
-# Source files for Serial adapter (exclude UDP adapter, UDP main, and example files)
-SERIAL_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterUDP.c $(SRC_DIR)/mainUDP.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
+# Source files for Serial adapter (exclude UDP adapter, UDP main, regular main, and example files)
+SERIAL_SOURCES = $(filter-out $(SRC_DIR)/hardware_adapterUDP.c $(SRC_DIR)/mainUDP.c $(SRC_DIR)/main.c $(SRC_DIR)/udp_example.c, $(wildcard $(SRC_DIR)/*.c))
 SERIAL_OBJECTS = $(SERIAL_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 SERIAL_OBJECTS_DEBUG = $(SERIAL_SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR_DEBUG)/%.o)
 

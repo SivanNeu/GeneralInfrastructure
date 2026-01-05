@@ -58,7 +58,7 @@ class HOMING_STAGE(Enum):
 ###############################################################################################################################################
 ###############################################################################################################################################
 class Control():
-    def __init__(self, config_dir, log_directory, controller, maximalVelocity=MAXIMALVELOCITY):   # image size in pixels (width, height)
+    def __init__(self, log_directory, controller, maximalVelocity=MAXIMALVELOCITY):   # image size in pixels (width, height)
         self.log_directory = log_directory
         self.maximalVelocity = maximalVelocity
         self._start_vertical_los_deg = None

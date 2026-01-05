@@ -9,7 +9,7 @@
 #include <cstring>
 #include <algorithm>
 
-SystemManager::SystemManager(const std::string& config_dir, const std::string& log_dir, double currentTime,
+SystemManager::SystemManager(const std::string& log_dir, double currentTime,
                              double dronemass,
                              const Vector3d& heading_dir_ned_init,
                              const Vector3d& desiredHeadingDir_ned,
@@ -31,7 +31,7 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
                              const std::string& secondaryControllerParamsFile,
                              YAW_COMMAND_TYPE yawCommandType,
                              bool rateControlEnabled)
-    : _config_dir(config_dir), _log_dir(log_dir),
+    : _log_dir(log_dir),
       _overall_start(currentTime < 0 ? TimeUtils::now() : currentTime),
       _prev_los_ned_dir(Vector3d::Zero()),
       _prev_pos_ned(Vector3d::Zero()),
@@ -61,19 +61,12 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
     
     // Initialize waypoint list if provided
     if (!waypointList.empty()) {
-        std::cout << "System_Manager: Loaded " << waypointList.size() << " waypoints" << std::endl;
-        for (size_t i = 0; i < waypointList.size(); i++) {
-            std::cout << "  Waypoint " << i << ": [" << waypointList[i].transpose() << "]" << std::endl;
-        }
-        std::cout << "  Waypoint reach threshold: " << waypointReachThreshold << " m" << std::endl;
+        std::cout << "System_Manager: Loaded " << waypointList.size() << " waypoints" << std::endl;      
         // Set initial waypoint
         if (pointIndex < static_cast<int>(waypointList.size())) {
             referencePoint = waypointList[pointIndex];
-            std::cout << "  Initial waypoint (index " << pointIndex << "): [" << referencePoint.transpose() << "]" << std::endl;
         }
-    } else {
-        std::cout << "System_Manager: No waypoint list provided, using hold position" << std::endl;
-    }
+    } 
     
     // Initialize controllers with parameters from JSON files
     // Use primaryControllerType (which falls back to controllerType in main.cpp if not specified)
@@ -85,14 +78,14 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
             rlParams = VelocityRLControllerParameters::loadFromJSON(primaryControllerParamsFile);
         }
         auto mainController = std::make_unique<VelocityRLController>(rlParams, maximalVelocity, _overall_start);
-        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
+        _controlMain = std::make_unique<Control>(_log_dir, mainController.release(), maximalVelocity);
     } else if (primaryControllerType == CONTROLLER_TYPE::VELOCITYPID) {
         VelocityPIDControllerParameters pidParams(dronemass);
         if (!primaryControllerParamsFile.empty()) {
             pidParams = VelocityPIDControllerParameters::loadFromJSON(primaryControllerParamsFile);
         }
         auto mainController = std::make_unique<VelocityPIDController>(pidParams, _overall_start, yawCommandType);
-        _controlMain = std::make_unique<Control>(_config_dir, _log_dir, mainController.release(), maximalVelocity);
+        _controlMain = std::make_unique<Control>(_log_dir, mainController.release(), maximalVelocity);
     }
     
     // Initialize secondary/auxiliary controller
@@ -105,19 +98,19 @@ SystemManager::SystemManager(const std::string& config_dir, const std::string& l
             auxParams = VelocityPIDControllerParameters::loadFromJSON(secondaryControllerParamsFile);
         }
         auto auxController = std::make_unique<VelocityPIDController>(auxParams, _overall_start, yawCommandType);
-        _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
+        _controlAux = std::make_unique<Control>(_log_dir, auxController.release(), maximalVelocity);
     } else if (!secondaryControllerParamsFile.empty()) {
         // Secondary controller explicitly specified via params file
         if (secondaryControllerType == CONTROLLER_TYPE::VELOCITYPID) {
             VelocityPIDControllerParameters auxParams(dronemass);
             auxParams = VelocityPIDControllerParameters::loadFromJSON(secondaryControllerParamsFile);
             auto auxController = std::make_unique<VelocityPIDController>(auxParams, _overall_start, yawCommandType);
-            _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
+            _controlAux = std::make_unique<Control>(_log_dir, auxController.release(), maximalVelocity);
         } else if (secondaryControllerType == CONTROLLER_TYPE::VELOCITYRL) {
             VelocityRLControllerParameters auxParams(dronemass);
             auxParams = VelocityRLControllerParameters::loadFromJSON(secondaryControllerParamsFile);
             auto auxController = std::make_unique<VelocityRLController>(auxParams, maximalVelocity, _overall_start);
-            _controlAux = std::make_unique<Control>(_config_dir, _log_dir, auxController.release(), maximalVelocity);
+            _controlAux = std::make_unique<Control>(_log_dir, auxController.release(), maximalVelocity);
         }
     }
     
@@ -254,7 +247,7 @@ std::tuple<std::vector<bool>, std::tuple<Vector3d, Vector3d, Vector3d>,
         heading_dir_ned = yawDefinedDir_ned.value();
     } else if (yawControlType == YAW_COMMAND::VELOCITY_DIR) {
         Eigen::Vector2d vel_2d = _currentData.pos_ned_m.vel_ned.head<2>();
-        if (vel_2d.norm() > 1.0) {
+        if (vel_2d.norm() > 0.1) {
             heading_dir_ned = _currentData.pos_ned_m.vel_ned;
             heading_dir_ned[2] = 0;
             heading_dir_ned.normalize();
@@ -275,11 +268,6 @@ std::tuple<std::vector<bool>, std::tuple<Vector3d, Vector3d, Vector3d>,
             if (waypointList.size() > 1) {
                 pointIndex = (pointIndex + 1) % waypointList.size();
                 referencePoint = waypointList[pointIndex];
-                std::cout << "System_Manager: Waypoint reached! Advancing to waypoint " << pointIndex 
-                          << " [" << referencePoint.transpose() << "]" << std::endl;
-            } else {
-                // Single waypoint - stay at it
-                std::cout << "System_Manager: Waypoint reached! (single waypoint mission)" << std::endl;
             }
         }
     }
@@ -324,7 +312,7 @@ std::tuple<std::vector<bool>, std::tuple<Vector3d, Vector3d, Vector3d>,
         dest_pos_ned = desired_trajectory.x[0];
         destHeight = desired_trajectory.x[0][2];
     }
-    
+       
     Vector3d trajDest_pos_ned = dest_pos_ned.value_or(Vector3d::Zero());
     trajDest_pos_ned[2] = destHeight.has_value() ? destHeight.value() : _currentData.pos_ned_m.ned[2];
     
@@ -425,8 +413,10 @@ CommandMessage SystemManager::publishCommand(const Vector3d& command, double yaw
             zmq::message_t data_msg(cmd_data.size());
             std::memcpy(data_msg.data(), cmd_data.data(), cmd_data.size());
             
+            // Send multi-part message: topic (with sndmore) then data (final part)
+            // Note: final part should not use dontwait to ensure multi-part message completes atomically
             pubSock.send(topic_msg, zmq::send_flags::sndmore);
-            pubSock.send(data_msg, zmq::send_flags::dontwait);
+            pubSock.send(data_msg);  // Remove dontwait to ensure multi-part message completes
             
             _cmd_send_count++;
             msg.velCmd = command;

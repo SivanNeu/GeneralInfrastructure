@@ -486,11 +486,16 @@ TrajectoryResult horz_circle(const Vector3d& center, double radius,
     );
     
     result.b1.resize(3);
-    result.b1[0] = Vector3d(std::cos(w * t), std::sin(w * t), 0);
+    // If missionAttitudeDirection is zero (equivalent to None in Python), use rotating b1
+    if (missionAttitudeDirection.norm() < 1e-6) {
+        result.b1[0] = Vector3d(std::cos(w * t), std::sin(w * t), 0);
+    } else {
+        result.b1[0] = missionAttitudeDirection;
+    }
     result.b1[1] = Vector3d::Zero();
     result.b1[2] = Vector3d::Zero();
     
-    result.pos_control = {false, false, true};
+    result.pos_control = {true, true, true};
     result.vel_control = {true, true, false};
     result.yaw_control = YAW_COMMAND::DEFINED_DIR;
     

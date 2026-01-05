@@ -14,7 +14,6 @@
 
 // Simple JSON parser for config file
 struct ConfigParams {
-    std::string config_dir;
     std::string log_dir;
     double currentTime = -1.0;
     double dronemass = 0.55;
@@ -93,12 +92,6 @@ ConfigParams parseConfigFile(const std::string& config_path) {
     }
     
     // Extract required string fields
-    params.config_dir = json.getString("config_dir", "");
-    if (params.config_dir.empty()) {
-        std::cerr << "Warning: Could not find 'config_dir' in config file" << std::endl;
-        return params;
-    }
-    
     params.log_dir = json.getString("log_dir", "");
     if (params.log_dir.empty()) {
         std::cerr << "Warning: Could not find 'log_dir' in config file" << std::endl;
@@ -177,7 +170,6 @@ void printHelp(const char* program_name) {
     std::cout << std::endl;
     std::cout << "Configuration File:" << std::endl;
     std::cout << "  The configuration file should be a JSON file containing the following fields:" << std::endl;
-    std::cout << "    - config_dir (string, required): Directory for configuration files" << std::endl;
     std::cout << "    - log_dir (string, required): Directory for log files" << std::endl;
     std::cout << "    - currentTime (double, optional): Current time, defaults to -1.0" << std::endl;
     std::cout << "    - dronemass (double, optional): Drone mass in kg, defaults to 0.55" << std::endl;
@@ -234,15 +226,13 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Failed to parse config file. Using default values." << std::endl;
             std::cerr << "Usage: " << (argc > 0 ? argv[0] : "SystemManagerMain") 
                       << " [config_file.json]" << std::endl;
-            std::cerr << "Default: config_dir='../logs/', log_dir='config/', currentTime=-1.0" << std::endl;
+            std::cerr << "Default: log_dir='config/', currentTime=-1.0" << std::endl;
             
             // Use defaults if parsing fails
-            config.config_dir = "../logs/";
             config.log_dir = "config/";
             config.currentTime = -1.0;
         } else {
             std::cout << "Config loaded successfully:" << std::endl;
-            std::cout << "  config_dir: " << config.config_dir << std::endl;
             std::cout << "  log_dir: " << config.log_dir << std::endl;
             std::cout << "  currentTime: " << config.currentTime << std::endl;
             std::cout << "  dronemass: " << config.dronemass << std::endl;
@@ -274,7 +264,7 @@ int main(int argc, char* argv[]) {
         }
         
         // Initialize SystemManager with parameters from config file
-        SystemManager sysMgr(config.config_dir, config.log_dir, config.currentTime,
+        SystemManager sysMgr(config.log_dir, config.currentTime,
                             config.dronemass,
                             config.heading_dir_ned,
                             config.desiredHeadingDir_ned,

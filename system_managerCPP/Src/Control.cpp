@@ -25,7 +25,7 @@
 
 // Guidance is now defined in Control.h
 
-Control::Control(const std::string& config_dir, const std::string& log_directory,
+Control::Control(const std::string& log_directory,
                  void* controller, double maximalVelocity)
     : log_directory(log_directory), maximalVelocity(maximalVelocity),
       _min_thrust(0.01), _max_thrust(1.0), MaximalThrust(1.0),

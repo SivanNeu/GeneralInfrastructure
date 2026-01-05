@@ -1,5 +1,4 @@
 {
-  "config_dir": "../logs/",
   "log_dir": "/home/valentin/RL/src/system_managerCPP/log/",
   "currentTime": -1.0,
   "dronemass": 0.55,

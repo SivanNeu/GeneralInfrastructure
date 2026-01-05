@@ -75,7 +75,6 @@ struct CommandMessage {
 
 class SystemManager {
 private:
-    std::string _config_dir;
     std::string _log_dir;
     double _overall_start;
     Vector3d _prev_los_ned_dir;
@@ -171,7 +170,7 @@ private:
     void gatherData();
 
 public:
-    SystemManager(const std::string& config_dir, const std::string& log_dir,
+    SystemManager(const std::string& log_dir,
                  double currentTime = -1.0,
                  double dronemass = 0.55,
                  const Vector3d& heading_dir_ned = Vector3d(-1, 1, 0),

@@ -3,8 +3,6 @@ import numpy as np
 from common import YAW_COMMAND, unitVec, lissajous_func
 
 def horz_circle(center=np.array([0,0,0]), radius=3, missionAttitudeDirection=None, Vel=1, start_time=None):
-    if missionAttitudeDirection is None:
-        missionAttitudeDirection = np.array([-1, 0, 0])
     if start_time is None:
         t = time.monotonic()
     else:
@@ -36,14 +34,16 @@ def horz_circle(center=np.array([0,0,0]), radius=3, missionAttitudeDirection=Non
     x_3dot =  np.array([A * a**3 * -np.cos(a * t + d), B * b**3 *  np.sin(b * t), C * c**3 * np.sin(c * t)])
     x_4dot =  np.array([A * a**4 *  np.sin(a * t + d), B * b**4 *  np.cos(b * t), C * c**4 * np.cos(c * t)])
 
-    b1 = missionAttitudeDirection
     b1_dot = np.array([0,0,0])  #
     b1_2dot = np.array([0,0,0])        # w = 2 * pi / 10
-    b1 = np.array([np.cos(w * t), np.sin(w * t), 0])
+    if missionAttitudeDirection is None:
+        b1 = np.array([np.cos(w * t), np.sin(w * t), 0])
+    else:
+        b1 = missionAttitudeDirection
     # b1d_dot = w * np.array([-sin(w * t), cos(w * t), 0])
     # b1d_2dot = w**2 * np.array([-cos(w * t), -sin(w * t), 0])
 
-    pos_control = [False, False, True]
+    pos_control = [True, True, True]
     vel_control = [True, True, False]
     yaw_control = YAW_COMMAND.DEFINED_DIR
     return (xd, x_dot, x_2dot, x_3dot, x_4dot), (b1, b1_dot, b1_2dot), (pos_control, vel_control, yaw_control)
