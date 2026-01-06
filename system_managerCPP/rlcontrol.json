@@ -1,5 +1,5 @@
 {
-  "log_dir": "/home/pi/RL/src/system_managerCPP/log/",
+  "log_dir": "/home/valentin/RL/src/system_managerCPP/log/",
   "currentTime": -1.0,
   "dronemass": 0.55,
   "heading_dir_ned": [-1.0, 1.0, 0.0],
@@ -18,9 +18,9 @@
   ],
   "waypointReachThreshold": 0.5,
   "primaryControllerType": "VELOCITYRL",
-  "primaryControllerParamsFile": "/home/pi/RL/src/system_managerCPP/velocity_rl_controller_params.json",
+  "primaryControllerParamsFile": "/home/valentin/RL/src/system_managerCPP/velocity_rl_controller_params.json",
   "secondaryControllerType":  "VELOCITYPID",
-  "secondaryControllerParamsFile": "/home/pi/RL/src/system_managerCPP/velocity_pid_controller_params.json",
+  "secondaryControllerParamsFile": "/home/valentin/RL/src/system_managerCPP/velocity_pid_controller_params.json",
   "yawCommandType": "RATE",
   "rateControlEnabled": false
 }

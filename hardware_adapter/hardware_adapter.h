@@ -55,6 +55,11 @@ typedef struct {
     
     // Mavlink address
     char* mavlink_address;
+    
+    // Logging
+    FILE* log_file;
+    pthread_mutex_t log_lock;
+    bool was_in_offboard_mode;
 } hardware_adapter_t;
 
 // Function declarations
@@ -81,6 +86,12 @@ void hardware_adapter_send_land_cmd(hardware_adapter_t* adapter);
 // Thread functions
 void* hardware_adapter_command_thread_func(void* arg);
 void* hardware_adapter_data_thread_func(void* arg);
+
+// Logging functions (internal)
+int hardware_adapter_open_log_file(hardware_adapter_t* adapter);
+void hardware_adapter_close_log_file(hardware_adapter_t* adapter);
+void hardware_adapter_log_mavlink_command(hardware_adapter_t* adapter, const char* command_type, const char* data_str);
+void hardware_adapter_check_mode_change(hardware_adapter_t* adapter);
 
 #endif // HARDWARE_ADAPTER_H
 

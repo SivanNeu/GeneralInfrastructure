@@ -109,6 +109,19 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
         return -1;
     }
     
+    // Initialize log mutex
+    if (pthread_mutex_init(&adapter->log_lock, NULL) != 0) {
+        fprintf(stderr, "Failed to initialize log mutex\n");
+        pthread_mutex_destroy(&adapter->data_lock);
+        free(adapter->log_dir);
+        adapter->log_dir = NULL;
+        return -1;
+    }
+    
+    // Initialize logging
+    adapter->log_file = NULL;
+    adapter->was_in_offboard_mode = false;
+    
     // Initialize filters
     lpf_init(&adapter->vertical_speed_filter, 0.1, false, LPF_TYPE_FIRST_ORDER);
     lpf_init(&adapter->altitude_filter, 0.3, false, LPF_TYPE_FIRST_ORDER);
@@ -254,8 +267,12 @@ void hardware_adapter_cleanup(hardware_adapter_t* adapter) {
     // Cleanup flight data
     flight_data_cleanup(&adapter->current_data);
     
-    // Destroy mutex
+    // Close log file if open
+    hardware_adapter_close_log_file(adapter);
+    
+    // Destroy mutexes
     pthread_mutex_destroy(&adapter->data_lock);
+    pthread_mutex_destroy(&adapter->log_lock);
     
     // Free strings
     if (adapter->log_dir != NULL) {
@@ -397,8 +414,14 @@ void hardware_adapter_parse(hardware_adapter_t* adapter, const char* msg_type, v
         mavlink_msg_heartbeat_decode(msg, &heartbeat);
         // printf("Heartbeat: custom_mode: %u\n", (unsigned int)heartbeat.custom_mode);
         // Always update custom_mode_id to reflect current mode (even if 0)
+        uint32_t prev_mode = adapter->current_data.custom_mode_id;
         adapter->current_data.custom_mode_id = heartbeat.custom_mode;
         adapter->current_data.gathered.custom_mode_id = true;
+        
+        // Check for mode changes (OFFBOARD mode detection)
+        if (prev_mode != heartbeat.custom_mode) {
+            hardware_adapter_check_mode_change(adapter);
+        }
         // Note: mode string would need to be converted from custom_mode_id
     }
     else if (strcmp(msg_type, "ATTITUDE_QUATERNION") == 0) {
@@ -557,6 +580,18 @@ void hardware_adapter_send_setpoint(hardware_adapter_t* adapter, const vec3_t* p
     
     mavlink_send_set_position_target_local_ned(adapter->mavlink_connection, time_boot_ms, coordinate_frame,
                                                type_mask, &pos_vec, &vel_vec, &acc_vec, yaw, yaw_rate);
+    
+    // Log the command
+    char log_data[512];
+    snprintf(log_data, sizeof(log_data), "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
+             pos_vec.data[0], pos_vec.data[1], pos_vec.data[2],
+             vel_vec.data[0], vel_vec.data[1], vel_vec.data[2],
+             acc_vec.data[0], acc_vec.data[1], acc_vec.data[2],
+             isnan(yaw) ? 0.0 : yaw, isnan(yaw_rate) ? 0.0 : yaw_rate,
+             0.0,  // thrust
+             0.0, 0.0, 0.0, 1.0,  // quat (w, x, y, z) - not used in setpoint
+             0.0, 0.0, 0.0);  // body rates - not used in setpoint
+    hardware_adapter_log_mavlink_command(adapter, "SETPOINT", log_data);
 }
 
 // Send goal attitude
@@ -589,6 +624,18 @@ void hardware_adapter_send_goal_attitude(hardware_adapter_t* adapter, double goa
     
     mavlink_send_set_attitude_target(adapter->mavlink_connection, time_boot_ms, type_mask,
                                      &q, body_roll_rate, body_pitch_rate, body_yaw_rate, goal_thrust);
+    
+    // Log the command
+    char log_data[512];
+    snprintf(log_data, sizeof(log_data), "%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f",
+             0.0, 0.0, 0.0,  // pos (not used in attitude)
+             0.0, 0.0, 0.0,  // vel (not used in attitude)
+             0.0, 0.0, 0.0,  // acc (not used in attitude)
+             0.0, 0.0,  // yaw, yaw_rate (not used in attitude)
+             goal_thrust,
+             q.w, q.x, q.y, q.z,  // quaternion
+             body_roll_rate, body_pitch_rate, body_yaw_rate);  // body rates
+    hardware_adapter_log_mavlink_command(adapter, "ATTITUDE", log_data);
 }
 
 // Send offboard command
@@ -1676,5 +1723,124 @@ static int deserialize_vel_cmd(const void* data, size_t data_len, vec3_t* vel, d
     }
     
     return 0;
+}
+
+// Generate unique datetime string for log filename (format: YYYY-MM-DD_HH-MM-SS)
+static char* get_unique_datetime_str(void) {
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char* datetime_str = (char*)malloc(32);
+    if (datetime_str == NULL) {
+        return NULL;
+    }
+    strftime(datetime_str, 32, "%Y-%m-%d_%H-%M-%S", tm_info);
+    return datetime_str;
+}
+
+// Open log file when entering OFFBOARD mode
+int hardware_adapter_open_log_file(hardware_adapter_t* adapter) {
+    if (adapter == NULL || adapter->log_dir == NULL) {
+        return -1;
+    }
+    
+    pthread_mutex_lock(&adapter->log_lock);
+    
+    // Close existing log file if open
+    if (adapter->log_file != NULL) {
+        fclose(adapter->log_file);
+        adapter->log_file = NULL;
+    }
+    
+    // Generate unique filename
+    char* datetime_str = get_unique_datetime_str();
+    if (datetime_str == NULL) {
+        pthread_mutex_unlock(&adapter->log_lock);
+        return -1;
+    }
+    
+    // Create log directory if it doesn't exist
+    char mkdir_cmd[512];
+    snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s", adapter->log_dir);
+    system(mkdir_cmd);
+    
+    // Create log file path
+    char log_path[1024];
+    snprintf(log_path, sizeof(log_path), "%s/%s_hardware_adapter.csv", adapter->log_dir, datetime_str);
+    free(datetime_str);
+    
+    // Open log file
+    adapter->log_file = fopen(log_path, "w");
+    if (adapter->log_file == NULL) {
+        fprintf(stderr, "Failed to open log file: %s\n", log_path);
+        pthread_mutex_unlock(&adapter->log_lock);
+        return -1;
+    }
+    
+    // Write CSV header
+    fprintf(adapter->log_file, "timestamp,local_ts,command_type,pos_x,pos_y,pos_z,vel_x,vel_y,vel_z,acc_x,acc_y,acc_z,yaw,yaw_rate,thrust,quat_w,quat_x,quat_y,quat_z,roll_rate,pitch_rate,yaw_rate_body\n");
+    fflush(adapter->log_file);
+    
+    printf("Hardware_adapter: Opened log file: %s\n", log_path);
+    
+    pthread_mutex_unlock(&adapter->log_lock);
+    return 0;
+}
+
+// Close log file when leaving OFFBOARD mode
+void hardware_adapter_close_log_file(hardware_adapter_t* adapter) {
+    if (adapter == NULL) {
+        return;
+    }
+    
+    pthread_mutex_lock(&adapter->log_lock);
+    
+    if (adapter->log_file != NULL) {
+        fflush(adapter->log_file);
+        fclose(adapter->log_file);
+        adapter->log_file = NULL;
+        printf("Hardware_adapter: Closed log file\n");
+    }
+    
+    pthread_mutex_unlock(&adapter->log_lock);
+}
+
+// Log MAVLink command to file
+void hardware_adapter_log_mavlink_command(hardware_adapter_t* adapter, const char* command_type, const char* data_str) {
+    if (adapter == NULL || adapter->log_file == NULL || command_type == NULL || data_str == NULL) {
+        return;
+    }
+    
+    pthread_mutex_lock(&adapter->log_lock);
+    
+    if (adapter->log_file != NULL) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        double local_ts = ts.tv_sec + ts.tv_nsec / 1e9;
+        
+        fprintf(adapter->log_file, "%.6f,%.6f,%s,%s\n", 
+                adapter->current_data.timestamp / 1000.0, local_ts, command_type, data_str);
+        fflush(adapter->log_file);
+    }
+    
+    pthread_mutex_unlock(&adapter->log_lock);
+}
+
+// Check for mode changes and open/close log files accordingly
+void hardware_adapter_check_mode_change(hardware_adapter_t* adapter) {
+    if (adapter == NULL) {
+        return;
+    }
+    
+    bool is_offboard = (adapter->current_data.custom_mode_id == PX4_FLIGHT_STATE_OFFBOARD);
+    
+    if (is_offboard && !adapter->was_in_offboard_mode) {
+        // Entering OFFBOARD mode - open log file
+        hardware_adapter_open_log_file(adapter);
+        adapter->was_in_offboard_mode = true;
+    } else if (!is_offboard && adapter->was_in_offboard_mode) {
+        // Leaving OFFBOARD mode - close log file
+        hardware_adapter_close_log_file(adapter);
+        adapter->was_in_offboard_mode = false;
+    }
 }
 

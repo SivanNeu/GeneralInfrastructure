@@ -55,6 +55,11 @@ typedef struct {
     
     // Mavlink address
     char* mavlink_address;
+    
+    // Logging
+    FILE* log_file;
+    pthread_mutex_t log_lock;
+    bool was_in_offboard_mode;
 } hardware_adapter_t;
 
 // Function declarations
