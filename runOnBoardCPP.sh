@@ -27,10 +27,8 @@ sleep 1
 tmux send-keys "$PROJECT_PATH/src/hardware_adapter/bin/hardware_adapterUDP --address udp:127.0.0.1:14540" ENTER
 
 tmux select-pane -t 1
-sleep 1
-tmux send-keys "conda activate RL" ENTER
-sleep 3
-tmux send-keys "$PROJECT_PATH/src/system_managerCPP/build/bin/SystemManagerMain $PROJECT_PATH/src/system_managerCPP/system_manager_config.json" ENTER
+sleep 2
+tmux send-keys "$PROJECT_PATH/src/system_managerCPP/build/bin/SystemManagerMain $PROJECT_PATH/src/system_managerCPP/pidcontrol.json" ENTER
 
 
 #run 2 src "quadCmdGate.py"

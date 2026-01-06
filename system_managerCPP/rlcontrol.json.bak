@@ -4,20 +4,17 @@
   "dronemass": 0.55,
   "heading_dir_ned": [-1.0, 1.0, 0.0],
   "desiredHeadingDir_ned": [-1.0, 1.0, 0.0],
-  "missionType": "WAYPOINT",
-  "yawControlType": "DEFINED_DIR",
+  "missionType": "WAYPOINT",       // WAYPOINT, VELOCITY, CIRCLE, LISSAJOUS, TRACKER, SECTION, SPINNING
+  "yawControlType": "DEFINED_DIR", // NO_CONTROL, DEFINED_DIR, HOLD_CUR_DIR, VELOCITY_DIR, CAMERA_DIR
   "yawCommandFactor": 1.0,
   "maximalVelocity": 0.75,
   "descentVelocity": 10.0,
-  "targetVelocity": 7.5,
+  "targetVelocity": 0.5,
   "originOffset_frd": [0.0, 0.0, 0.0],
   "terminalHomingAlowed": true,
-  "circleRadius": 5.0,
+  "circleRadius": 0.5,
   "waypointList": [
-    [5.0, 5.0, -2.0],
-    [10.0, 5.0, -2.0],
-    [10.0, 10.0, -2.0],
-    [5.0, 10.0, -2.0]
+    [0.0, 0.0, -2.0]
   ],
   "waypointReachThreshold": 0.5,
   "primaryControllerType": "VELOCITYRL",
