@@ -51,7 +51,7 @@ SINE_VZ_FREQ = 0.2
 SINE_YAWRATE_FREQ = 1
 
 # Command frequency (Hz) - how often to send MAVLink commands
-SINE_CMD_FREQ = 10.0  # 50 Hz = 20ms between commands
+SINE_CMD_FREQ = 50.0  # 50 Hz = 20ms between commands
 
 
 def parse_args() -> argparse.Namespace:

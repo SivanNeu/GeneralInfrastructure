@@ -82,3 +82,4 @@ config/*
 
 logs/*
 logs/*.csv
+simplemavlinktest/simpleMavlinkTest

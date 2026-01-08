@@ -1,15 +1,15 @@
 #define _POSIX_C_SOURCE 200809L
-#include "hardware_adapterUDP.h"
+#include "mavlink_to_ZMQ.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
 
-static hardware_adapter_t* g_adapter = NULL;
+static mavlink_to_zmq_t* g_bridge = NULL;
 
 void print_help(const char* program_name) {
-    printf("Hardware Adapter (UDP) - MAVLink UDP Communication Bridge\n");
+    printf("MAVLink to ZMQ Bridge - MAVLink UDP to ZMQ Communication Bridge\n");
     printf("\n");
     printf("Usage: %s [OPTIONS] [LOG_DIRECTORY]\n", program_name);
     printf("\n");
@@ -23,16 +23,17 @@ void print_help(const char* program_name) {
     printf("  LOG_DIRECTORY        Directory for log files (default: ../logs/)\n");
     printf("\n");
     printf("Description:\n");
-    printf("  This program acts as a bridge between the system manager and the\n");
-    printf("  MAVLink flight controller via UDP communication. It receives\n");
-    printf("  commands from the system manager via ZMQ and forwards them to\n");
-    printf("  the flight controller via MAVLink over UDP.\n");
+    printf("  This program acts as a bridge between MAVLink flight controller\n");
+    printf("  and the system manager via ZMQ communication. It receives\n");
+    printf("  messages from the MAVLink flight controller via UDP and publishes\n");
+    printf("  them to ZMQ for consumption by the system manager.\n");
     printf("\n");
     printf("  Default MAVLink connection: udp:14540 (server mode, listening on port 14540)\n");
     printf("\n");
-    printf("  The adapter runs two threads:\n");
-    printf("    - Command thread: handles commands from system_manager to MAVLink\n");
-    printf("    - Data thread: maintains current_data and publishes to system_manager\n");
+    printf("  The bridge runs a single data thread that:\n");
+    printf("    - Receives MAVLink messages from the flight controller\n");
+    printf("    - Parses and filters the data\n");
+    printf("    - Publishes flight data to system_manager via ZMQ\n");
     printf("\n");
     printf("Examples:\n");
     printf("  %s                                    # Use defaults (../logs/, udp:14540)\n", program_name);
@@ -46,12 +47,12 @@ void print_help(const char* program_name) {
 
 void signal_handler(int sig) {
     (void)sig;
-    if (g_adapter != NULL) {
-        printf("\nShutting down hardware adapter...\n");
-        hardware_adapter_stop(g_adapter);
-        hardware_adapter_cleanup(g_adapter);
-        free(g_adapter);
-        g_adapter = NULL;
+    if (g_bridge != NULL) {
+        printf("\nShutting down MAVLink to ZMQ bridge...\n");
+        mavlink_to_zmq_stop(g_bridge);
+        mavlink_to_zmq_cleanup(g_bridge);
+        free(g_bridge);
+        g_bridge = NULL;
     }
     exit(0);
 }
@@ -86,47 +87,45 @@ int main(int argc, char* argv[]) {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
-    // Allocate hardware adapter (use calloc to ensure zero-initialization)
-    g_adapter = (hardware_adapter_t*)calloc(1, sizeof(hardware_adapter_t));
-    if (g_adapter == NULL) {
-        fprintf(stderr, "Failed to allocate hardware adapter\n");
+    // Allocate MAVLink to ZMQ bridge (use calloc to ensure zero-initialization)
+    g_bridge = (mavlink_to_zmq_t*)calloc(1, sizeof(mavlink_to_zmq_t));
+    if (g_bridge == NULL) {
+        fprintf(stderr, "Failed to allocate MAVLink to ZMQ bridge\n");
         return 1;
     }
     
     // Set MAVLink address if provided
     if (mavlink_address != NULL) {
-        g_adapter->mavlink_address = strdup(mavlink_address);
-        if (g_adapter->mavlink_address == NULL) {
+        g_bridge->mavlink_address = strdup(mavlink_address);
+        if (g_bridge->mavlink_address == NULL) {
             fprintf(stderr, "Failed to allocate memory for MAVLink address\n");
-            free(g_adapter);
+            free(g_bridge);
             return 1;
         }
     }
     
-    // Initialize hardware adapter
-    if (hardware_adapter_init(g_adapter, log_dir) != 0) {
-        fprintf(stderr, "Hardware adapter initialization failed. Exiting.\n");
-        free(g_adapter);
+    // Initialize MAVLink to ZMQ bridge
+    if (mavlink_to_zmq_init(g_bridge, log_dir) != 0) {
+        fprintf(stderr, "MAVLink to ZMQ bridge initialization failed. Exiting.\n");
+        free(g_bridge);
         return 1;
     }
     
-    if (!hardware_adapter_init_succeeded(g_adapter)) {
-        fprintf(stderr, "Hardware adapter initialization failed. Exiting.\n");
-        hardware_adapter_cleanup(g_adapter);
-        free(g_adapter);
+    if (!mavlink_to_zmq_init_succeeded(g_bridge)) {
+        fprintf(stderr, "MAVLink to ZMQ bridge initialization failed. Exiting.\n");
+        mavlink_to_zmq_cleanup(g_bridge);
+        free(g_bridge);
         return 1;
     }
     
-    printf("Hardware adapter started with two threads:\n");
-    printf("  - Command thread: handling commands from system_manager to mavlink\n");
-    printf("  - Data thread: maintaining current_data and publishing to system_manager\n");
+    printf("MAVLink to ZMQ bridge started with data thread:\n");
+    printf("  - Data thread: receiving MAVLink messages and publishing to system_manager\n");
     
     // Main loop just keeps the process alive
-    // The threads handle all the work asynchronously
+    // The thread handles all the work asynchronously
     while (1) {
         sleep(1);
     }
     
     return 0;
 }
-

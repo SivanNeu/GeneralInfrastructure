@@ -2,9 +2,9 @@
 #define HARDWARE_ADAPTER_H
 
 #include "common.h"
-#include "low_pass_filter.h"
 #include "zmq_topics.h"
 #include "zmq_wrapper.h"
+#include "command_queue.h"
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -18,6 +18,14 @@
 #define MAX_VERTICAL_VEL_JUMP_M_S 3.0
 #define PUBLISH_FREQ_HZ 500
 #define PUBLISH_DT (1.0 / PUBLISH_FREQ_HZ)
+#define MAVLINK_DEFAULT_UDP_PORT 14030
+
+// Process pair enable/disable defines
+// Pair 2: Process 3 (ZMQ reader) + Process 4 (MAVLink sender)
+// If not defined, defaults to enabled (1)
+#ifndef ENABLE_COMMAND_PROCESSING_PAIR
+#define ENABLE_COMMAND_PROCESSING_PAIR 1  // Enable Pair 2: Processes 3 & 4 (ZMQ reader + MAVLink sender)
+#endif
 
 // Hardware adapter structure
 typedef struct {
@@ -26,18 +34,6 @@ typedef struct {
     // Mavlink connection
     void* mavlink_connection;  // Will be mavlink_connection_t from mavlink library
     
-    // Flight data
-    flight_data_t current_data;
-    pthread_mutex_t data_lock;
-    
-    // Filters
-    low_pass_filter_t vertical_speed_filter;
-    low_pass_filter_t altitude_filter;
-    double prev_alt_m;
-    int alt_vel_count;
-    double prev_vel_vertical;
-    double prev_alt_ts;
-    
     // Control flags
     bool mavlink_connected_to_usb;
     bool disable_offboard_control;
@@ -45,21 +41,18 @@ typedef struct {
     bool init_success;
     bool running;
     
-    // Threading
-    pthread_t command_thread;
-    pthread_t data_thread;
+    // Threading (2 processes)
+    pthread_t zmq_reader_thread;        // Process 3: Reads commands from ZMQ and enqueues to command_queue
+    pthread_t mavlink_sender_thread;    // Process 4: Dequeues from command_queue and sends to MAVLink UDP
+    
+    // Thread-safe queues - ONLY shared structures between threads
+    command_queue_t command_queue;       // ONLY shared structure between process 3 (ZMQ reader) and process 4 (MAVLink sender)
     
     // ZMQ sockets
-    void* pub_socket;
     void* sub_socket;
     
     // Mavlink address
     char* mavlink_address;
-    
-    // Logging
-    FILE* log_file;
-    pthread_mutex_t log_lock;
-    bool was_in_offboard_mode;
 } hardware_adapter_t;
 
 // Function declarations
@@ -70,10 +63,7 @@ void hardware_adapter_stop(hardware_adapter_t* adapter);
 
 // Internal functions
 int hardware_adapter_init_mavlink(hardware_adapter_t* adapter);
-void hardware_adapter_listener_to_mavlink(hardware_adapter_t* adapter, bool blocking, double timeout, bool use_lock, bool apply_filter);
 void hardware_adapter_listener_to_commands(hardware_adapter_t* adapter);
-void hardware_adapter_filter_data(hardware_adapter_t* adapter, flight_data_t* current_data);
-void hardware_adapter_parse(hardware_adapter_t* adapter, const char* msg_type, void* msg_dict);
 void hardware_adapter_send_setpoint(hardware_adapter_t* adapter, const vec3_t* pos, const vec3_t* vel, 
                                      const vec3_t* acc, double yaw, double yaw_rate);
 void hardware_adapter_send_goal_attitude(hardware_adapter_t* adapter, double goal_thrust, 
@@ -83,9 +73,8 @@ void hardware_adapter_arm(hardware_adapter_t* adapter);
 void hardware_adapter_send_takeoff_cmd(hardware_adapter_t* adapter, double takeoff_altitude);
 void hardware_adapter_send_land_cmd(hardware_adapter_t* adapter);
 
-// Thread functions
-void* hardware_adapter_command_thread_func(void* arg);
-void* hardware_adapter_data_thread_func(void* arg);
+// Thread functions (2 processes)
+void* hardware_adapter_zmq_reader_thread_func(void* arg);  // Process 3: Read ZMQ, enqueue to command_queue
+void* hardware_adapter_mavlink_sender_thread_func(void* arg);  // Process 4: Dequeue from command_queue, send to MAVLink UDP
 
 #endif // HARDWARE_ADAPTER_H
-
