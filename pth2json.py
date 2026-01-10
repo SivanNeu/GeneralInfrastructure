@@ -83,10 +83,27 @@ def pth_to_json(pth_path, json_path=None):
     print(f"Loading PyTorch model from: {pth_path}")
     
     # Load state dict
+    # Handle PyTorch 2.6+ weights_only=True default
+    # Try with weights_only=True first, fall back to weights_only=False if needed
+    checkpoint = None
     try:
-        checkpoint = torch.load(pth_path, map_location='cpu')
+        # First attempt: try with weights_only=True (safer, default in PyTorch 2.6+)
+        checkpoint = torch.load(pth_path, map_location='cpu', weights_only=True)
     except Exception as e:
-        raise RuntimeError(f"Failed to load PyTorch file: {e}")
+        error_msg = str(e)
+        # If it fails due to weights_only restrictions, try with weights_only=False
+        if 'weights_only' in error_msg or 'WeightsUnpickler' in error_msg or 'allowed global' in error_msg.lower():
+            print("Note: Using weights_only=False to load checkpoint (may contain numpy scalars or other objects)")
+            try:
+                checkpoint = torch.load(pth_path, map_location='cpu', weights_only=False)
+            except Exception as e2:
+                raise RuntimeError(f"Failed to load PyTorch file even with weights_only=False: {e2}")
+        else:
+            # Re-raise if it's a different error
+            raise RuntimeError(f"Failed to load PyTorch file: {e}")
+    
+    if checkpoint is None:
+        raise RuntimeError("Failed to load PyTorch file: checkpoint is None")
     
     # Handle checkpoints that are wrapped in "model" key (common in Sample Factory)
     if isinstance(checkpoint, dict) and 'model' in checkpoint:
@@ -149,20 +166,20 @@ def pth_to_json(pth_path, json_path=None):
 
 
 if __name__ == '__main__':
-    # Default path for debugging
-    DEFAULT_PTH = '/home/valentin/RL/src/train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.pth'
-    
     parser = argparse.ArgumentParser(
-        description='Convert PyTorch .pth files to JSON format for C++ consumption',
+        description='Convert PyTorch .pth files to JSON format for C++ consumption.\n'
+                    'Stores tensor data along with shape and dtype information as base64-encoded bytes.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='Example:\n  python pth2json.py model.pth\n  python pth2json.py model.pth output.json\n  python pth2json.py  # Uses default path for debugging'
+        epilog='Examples:\n'
+               '  python pth2json.py model.pth\n'
+               '  python pth2json.py model.pth output.json\n'
+               '  python pth2json.py --help  # Show this help message',
+        add_help=True
     )
     parser.add_argument(
         'pth_path',
         type=str,
-        nargs='?',
-        default=DEFAULT_PTH,
-        help=f'Path to the input .pth file (default: {DEFAULT_PTH})'
+        help='Path to the input .pth file'
     )
     parser.add_argument(
         'json_path',
@@ -171,6 +188,11 @@ if __name__ == '__main__':
         default=None,
         help='Path to the output .json file (optional, defaults to input filename with .json extension)'
     )
+    
+    # Show help if no arguments provided
+    if len(sys.argv) == 1:
+        parser.print_help()
+        sys.exit(0)
     
     args = parser.parse_args()
     

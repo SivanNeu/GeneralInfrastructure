@@ -15,28 +15,29 @@
 // Simple JSON parser for config file
 struct ConfigParams {
     std::string log_dir;
-    double currentTime = -1.0;
-    double dronemass = 0.55;
-    Vector3d heading_dir_ned = Vector3d(-1, 1, 0);
-    Vector3d desiredHeadingDir_ned = Vector3d(-1, 1, 0);
+    double currentTime = DEFAULT_CURRENT_TIME;
+    double dronemass = DEFAULT_DRONE_MASS;
+    Vector3d heading_dir_ned = Vector3d(DEFAULT_HEADING_DIR_NED_X, DEFAULT_HEADING_DIR_NED_Y, DEFAULT_HEADING_DIR_NED_Z);
+    Vector3d desiredHeadingDir_ned = Vector3d(DEFAULT_DESIRED_HEADING_DIR_NED_X, DEFAULT_DESIRED_HEADING_DIR_NED_Y, DEFAULT_DESIRED_HEADING_DIR_NED_Z);
     MISSION_TYPE missionType = MISSION_TYPE::WAYPOINT;
     YAW_COMMAND yawControlType = YAW_COMMAND::DEFINED_DIR;
-    double yawCommandFactor = 1.0;
-    double maximalVelocity = 0.75;
-    double descentVelocity = 10.0;
-    double targetVelocity = 7.5;
+    double yawCommandFactor = DEFAULT_YAW_COMMAND_FACTOR;
+    double maximalVelocity = DEFAULT_MAXIMAL_VELOCITY;
+    double descentVelocity = DEFAULT_DESCENT_VELOCITY;
+    double targetVelocity = DEFAULT_TARGET_VELOCITY;
     Vector3d originOffset_frd = Vector3d::Zero();
-    bool terminalHomingAlowed = true;
-    double circleRadius = 5.0;
+    bool terminalHomingAlowed = DEFAULT_TERMINAL_HOMING_ALLOWED;
+    double circleRadius = DEFAULT_CIRCLE_RADIUS;
     std::vector<Vector3d> waypointList;  // List of waypoints for WAYPOINT mission type
-    double waypointReachThreshold = 0.5;  // Distance threshold to consider waypoint reached (meters)
+    double waypointReachThreshold = DEFAULT_WAYPOINT_REACH_THRESHOLD;  // Distance threshold to consider waypoint reached (meters)
     CONTROLLER_TYPE controllerType = CONTROLLER_TYPE::VELOCITYRL;
     CONTROLLER_TYPE primaryControllerType = CONTROLLER_TYPE::VELOCITYRL;
     std::string primaryControllerParamsFile;
     CONTROLLER_TYPE secondaryControllerType = CONTROLLER_TYPE::VELOCITYPID;
     std::string secondaryControllerParamsFile;
     YAW_COMMAND_TYPE yawCommandType = YAW_COMMAND_TYPE::RATE;
-    bool rateControlEnabled = false;
+    bool rateControlEnabled = DEFAULT_RATE_CONTROL_ENABLED;
+    double loop_period = DEFAULT_LOOP_PERIOD;
     bool valid = false;
 };
 
@@ -88,37 +89,39 @@ ConfigParams parseConfigFile(const std::string& config_path) {
     JsonFile json(config_path);
     if (!json.isValid()) {
         std::cerr << "Error: Could not open config file: " << config_path << std::endl;
-        return params;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
     
     // Extract required string fields
     params.log_dir = json.getString("log_dir", "");
     if (params.log_dir.empty()) {
-        std::cerr << "Warning: Could not find 'log_dir' in config file" << std::endl;
-        return params;
+        std::cerr << "Error: Could not find 'log_dir' in config file: " << config_path << std::endl;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
     
     // Extract double values
-    params.currentTime = json.getDouble("currentTime", -1.0);
-    params.dronemass = json.getDouble("dronemass", 0.55);
-    params.yawCommandFactor = json.getDouble("yawCommandFactor", 1.0);
-    params.maximalVelocity = json.getDouble("maximalVelocity", 0.75);
-    params.descentVelocity = json.getDouble("descentVelocity", 10.0);
-    params.targetVelocity = json.getDouble("targetVelocity", 7.5);
-    params.circleRadius = json.getDouble("circleRadius", 5.0);
+    params.currentTime = json.getDouble("currentTime", DEFAULT_CURRENT_TIME);
+    params.dronemass = json.getDouble("dronemass", DEFAULT_DRONE_MASS);
+    params.yawCommandFactor = json.getDouble("yawCommandFactor", DEFAULT_YAW_COMMAND_FACTOR);
+    params.maximalVelocity = json.getDouble("maximalVelocity", DEFAULT_MAXIMAL_VELOCITY);
+    params.descentVelocity = json.getDouble("descentVelocity", DEFAULT_DESCENT_VELOCITY);
+    params.targetVelocity = json.getDouble("targetVelocity", DEFAULT_TARGET_VELOCITY);
+    params.circleRadius = json.getDouble("circleRadius", DEFAULT_CIRCLE_RADIUS);
     
     // Extract Vector3d fields
-    params.heading_dir_ned = json.getVector3d("heading_dir_ned", Vector3d(-1, 1, 0));
-    params.desiredHeadingDir_ned = json.getVector3d("desiredHeadingDir_ned", Vector3d(-1, 1, 0));
+    params.heading_dir_ned = json.getVector3d("heading_dir_ned", Vector3d(DEFAULT_HEADING_DIR_NED_X, DEFAULT_HEADING_DIR_NED_Y, DEFAULT_HEADING_DIR_NED_Z));
+    params.desiredHeadingDir_ned = json.getVector3d("desiredHeadingDir_ned", Vector3d(DEFAULT_DESIRED_HEADING_DIR_NED_X, DEFAULT_DESIRED_HEADING_DIR_NED_Y, DEFAULT_DESIRED_HEADING_DIR_NED_Z));
     params.originOffset_frd = json.getVector3d("originOffset_frd", Vector3d::Zero());
     
     // Extract waypoint list (array of Vector3d)
     params.waypointList = json.getVector3dArray("waypointList");
-    params.waypointReachThreshold = json.getDouble("waypointReachThreshold", 0.5);
+    params.waypointReachThreshold = json.getDouble("waypointReachThreshold", DEFAULT_WAYPOINT_REACH_THRESHOLD);
     
     // Extract boolean values
-    params.terminalHomingAlowed = json.getBool("terminalHomingAlowed", true);
-    params.rateControlEnabled = json.getBool("rateControlEnabled", false);
+    params.terminalHomingAlowed = json.getBool("terminalHomingAlowed", DEFAULT_TERMINAL_HOMING_ALLOWED);
+    params.rateControlEnabled = json.getBool("rateControlEnabled", DEFAULT_RATE_CONTROL_ENABLED);
     
     // Extract enum values (need to parse strings)
     std::string missionTypeStr = json.getString("missionType", "WAYPOINT");
@@ -150,6 +153,8 @@ ConfigParams parseConfigFile(const std::string& config_path) {
     
     std::string yawCommandTypeStr = json.getString("yawCommandType", "RATE");
     params.yawCommandType = parseYawCommandType(yawCommandTypeStr);
+    
+    params.loop_period = json.getDouble("loop_period", DEFAULT_LOOP_PERIOD);
     
     params.valid = true;
     return params;
@@ -226,11 +231,11 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Failed to parse config file. Using default values." << std::endl;
             std::cerr << "Usage: " << (argc > 0 ? argv[0] : "SystemManagerMain") 
                       << " [config_file.json]" << std::endl;
-            std::cerr << "Default: log_dir='config/', currentTime=-1.0" << std::endl;
+            std::cerr << "Default: log_dir='config/', currentTime=" << DEFAULT_CURRENT_TIME << std::endl;
             
             // Use defaults if parsing fails
             config.log_dir = "config/";
-            config.currentTime = -1.0;
+            config.currentTime = DEFAULT_CURRENT_TIME;
         } else {
             std::cout << "Config loaded successfully:" << std::endl;
             std::cout << "  log_dir: " << config.log_dir << std::endl;
@@ -261,6 +266,7 @@ int main(int argc, char* argv[]) {
             std::cout << "  secondaryControllerParamsFile: " << config.secondaryControllerParamsFile << std::endl;
             std::cout << "  yawCommandType: " << static_cast<int>(config.yawCommandType) << std::endl;
             std::cout << "  rateControlEnabled: " << (config.rateControlEnabled ? "true" : "false") << std::endl;
+            std::cout << "  loop_period: " << config.loop_period << std::endl;
         }
         
         // Initialize SystemManager with parameters from config file
@@ -290,11 +296,11 @@ int main(int argc, char* argv[]) {
         std::cout << "System_Manager initialized. Starting main loop..." << std::endl;
         std::cout << "System_Manager: Waiting for flight data from hardware_adapter..." << std::endl;
         std::cout << "System_Manager: If you see '-return-0-' messages, hardware_adapter may not be publishing data" << std::endl;
-        std::cout << "System_Manager: Main loop running at 100Hz..." << std::endl;
+        std::cout << "System_Manager: Main loop running at " << (1.0 / config.loop_period) << "Hz (period: " << config.loop_period << "s)..." << std::endl;
         
         int loop_count = 0;
         double next_loop_time = TimeUtils::now();
-        const double loop_period = 0.010;  // 100Hz = 0.010 seconds per iteration
+        const double loop_period = config.loop_period;
         
         while (true) {
             // Variable delay to maintain 100Hz loop frequency

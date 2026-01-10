@@ -7,14 +7,14 @@
   "missionType": "WAYPOINT",       // WAYPOINT, VELOCITY, CIRCLE, LISSAJOUS, TRACKER, SECTION, SPINNING
   "yawControlType": "DEFINED_DIR", // NO_CONTROL, DEFINED_DIR, HOLD_CUR_DIR, VELOCITY_DIR, CAMERA_DIR
   "yawCommandFactor": 1.0,
-  "maximalVelocity": 0.75,
+  "maximalVelocity": 0.5,
   "descentVelocity": 10.0,
   "targetVelocity": 0.5,
   "originOffset_frd": [0.0, 0.0, 0.0],
   "terminalHomingAlowed": true,
   "circleRadius": 0.5,
   "waypointList": [
-    [0.0, 0.0, -2.0]
+    [0.5, 0.0, 0.0]
   ],
   "waypointReachThreshold": 0.5,
   "primaryControllerType": "VELOCITYRL",
@@ -22,6 +22,7 @@
   "secondaryControllerType":  "VELOCITYPID",
   "secondaryControllerParamsFile": "/home/pi/RL/src/system_managerCPP/velocity_pid_controller_params.json",
   "yawCommandType": "RATE",
-  "rateControlEnabled": false
+  "rateControlEnabled": false,
+  "loop_period": 0.03
 }
 

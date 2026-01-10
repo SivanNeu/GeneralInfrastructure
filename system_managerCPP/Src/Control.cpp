@@ -191,7 +191,13 @@ std::tuple<Vector3d, Vector3d, Quaternion> Control::get_cmd(
         double velCmdAbsClipped = std::max(0.0, std::min(velCmdAbs, maximalVelocity));
         command = velCmdDir * velCmdAbsClipped;
     } else if (controllerType == CONTROLLER_TYPE::VELOCITYRL) {
-        command = f_total;
+        Vector3d velCmdDir = Vector3d::Zero();
+        if (f_total.norm() > 0) {
+            velCmdDir = f_total / f_total.norm();
+        }
+        double velCmdAbs = f_total.norm();
+        double velCmdAbsClipped = std::max(0.0, std::min(velCmdAbs, maximalVelocity));
+        command = velCmdDir * velCmdAbsClipped;
     } else if (controllerType == CONTROLLER_TYPE::ACCELERATIONPID) {
         Vector3d accCmdDir = f_total / f_total.norm();
         double accCmdAbs = f_total.norm();

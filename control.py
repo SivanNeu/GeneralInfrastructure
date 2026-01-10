@@ -162,7 +162,13 @@ class Control():
             velCmd = velCmdDir * velCmdAbsClipped
             command = velCmd
         elif self.controlnode.controllerType == CONTROLLER_TYPE.VELOCITYRL:
-            velCmd = f_total
+            velCmdDir = np.zeros(3)
+            if np.linalg.norm(f_total) > 0:
+                velCmdDir = f_total/np.linalg.norm(f_total)
+                
+            velCmdAbs = np.linalg.norm(f_total)
+            velCmdAbsClipped = np.clip(velCmdAbs, 0, self.maximalVelocity)
+            velCmd = velCmdDir * velCmdAbsClipped
             command = velCmd
             rpyRate_cmd = Omega_desired_frd
             R_desired = quat_ned_bodyfrd.to_rotation_matrix()

@@ -61,6 +61,30 @@ class MISSION_TYPE(Enum):
 #################################################################################################################
 GOAL_LOOP_FREQ_HZ = 50
 GPS_SEARCH_TIMEOUT_SEC = 3
+
+# Default configuration parameters (matching SystemManager.h)
+DEFAULT_LOOP_PERIOD = 0.03
+DEFAULT_CURRENT_TIME = -1.0
+DEFAULT_DRONE_MASS = 0.55
+DEFAULT_YAW_COMMAND_FACTOR = 1.0
+DEFAULT_MAXIMAL_VELOCITY = 0.75
+DEFAULT_DESCENT_VELOCITY = 10.0
+DEFAULT_TARGET_VELOCITY = 7.5
+DEFAULT_CIRCLE_RADIUS = 5.0
+DEFAULT_WAYPOINT_REACH_THRESHOLD = 0.5
+
+# Default Vector3d components
+DEFAULT_HEADING_DIR_NED_X = -1.0
+DEFAULT_HEADING_DIR_NED_Y = 1.0
+DEFAULT_HEADING_DIR_NED_Z = 0.0
+
+DEFAULT_DESIRED_HEADING_DIR_NED_X = -1.0
+DEFAULT_DESIRED_HEADING_DIR_NED_Y = 1.0
+DEFAULT_DESIRED_HEADING_DIR_NED_Z = 0.0
+
+# Default boolean values
+DEFAULT_TERMINAL_HOMING_ALLOWED = True
+DEFAULT_RATE_CONTROL_ENABLED = False
 #################################################################################################################
 class System_Manager():
     def __init__(self, log_dir, sim_object=None, external_imu=None, use_usb_for_mavlink=False, currentTime=None, config_dict=None):
@@ -102,28 +126,27 @@ class System_Manager():
         if config_dict is not None:
             self._load_config_from_dict(config_dict)
         else:
-            # Use default parameters (preserve original code exactly)
+            # Use default parameters (using constants matching C++ version)
             ##############################
             # start scenario definitions #
             ##############################
-            factor = 1
-            self.referencePoint = np.array([ 0, 0, 0])
-            self.desiredHeadingDir_ned = np.array([-1, 1, 0])
-            # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
+            self.referencePoint = np.array([0, 0, 0])
+            self.desiredHeadingDir_ned = np.array([DEFAULT_DESIRED_HEADING_DIR_NED_X, DEFAULT_DESIRED_HEADING_DIR_NED_Y, DEFAULT_DESIRED_HEADING_DIR_NED_Z])
             
-            self.missionType = MISSION_TYPE.CIRCLE    # 1 - WAYPOINT, 2 - VELOCITY, 3 - CIRCLE, 4 - LISSAJOUS, 5 - TRACKER, 6 - SECTION, 7 - SPINNING
-            self.yawControlType = YAW_COMMAND.DEFINED_DIR   #YAW_COMMAND.CAMERA_DIR   #YAW_COMMAND.VELOCITY_DIR  # YAW_COMMAND.HOLD_CUR_DIR # YAW_COMMAND.DEFINED_DIR
+            self.missionType = MISSION_TYPE.WAYPOINT
+            self.yawControlType = YAW_COMMAND.DEFINED_DIR
             
-            self.yawCommandFactor = 1        
-            self.maximalVelocity = 5*factor # m/s (horizontal)
-            self.descentVelocity = 10
-            self.targetVelocity = 2*factor
-            self.originOffset_frd = np.array([0,0,0])   # target waypoint in mode WAYPOINT or center of the circle in mode CIRCLE
-            self.terminalHomingAlowed = True 
-            self.circleRadius = 5*factor
-            self.controllerType = CONTROLLER_TYPE.VELOCITYPID
+            self.yawCommandFactor = DEFAULT_YAW_COMMAND_FACTOR
+            self.maximalVelocity = DEFAULT_MAXIMAL_VELOCITY
+            self.descentVelocity = DEFAULT_DESCENT_VELOCITY
+            self.targetVelocity = DEFAULT_TARGET_VELOCITY
+            self.originOffset_frd = np.array([0, 0, 0])
+            self.terminalHomingAlowed = DEFAULT_TERMINAL_HOMING_ALLOWED
+            self.circleRadius = DEFAULT_CIRCLE_RADIUS
+            self.controllerType = CONTROLLER_TYPE.VELOCITYRL
             self.yawCommandType = YAW_COMMAND_TYPE.RATE
-            self.rateControlEnabled = False
+            self.rateControlEnabled = DEFAULT_RATE_CONTROL_ENABLED
+            self.loop_period = DEFAULT_LOOP_PERIOD
         
         # Initialize controllers based on controller type (preserve original code)
         if self.controllerType == CONTROLLER_TYPE.VELOCITYRL:        
@@ -194,83 +217,95 @@ class System_Manager():
         Args:
             config_dict: Dictionary containing configuration parameters
         """
-        # Load values from JSON config
-        factor = 1
-        self.referencePoint = np.array(config_dict.get('referencePoint', [0, 0, 0]))
-        self.desiredHeadingDir_ned = np.array(config_dict.get('desiredHeadingDir_ned', [-1, 1, 0]))
-        # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
-        if 'waypointList' in config_dict:
-            self.pointList = np.array(config_dict['waypointList'])
+        try:
+            # Load values from JSON config
+            factor = 1
+            self.referencePoint = np.array(config_dict.get('referencePoint', [0, 0, 0]))
+            self.desiredHeadingDir_ned = np.array(config_dict.get('desiredHeadingDir_ned', [DEFAULT_DESIRED_HEADING_DIR_NED_X, DEFAULT_DESIRED_HEADING_DIR_NED_Y, DEFAULT_DESIRED_HEADING_DIR_NED_Z]))
+            # self.pointList = np.array([[0, 10*factor*0, 0], [0, 10*factor, 0]])
+            if 'waypointList' in config_dict:
+                self.pointList = np.array(config_dict['waypointList'])
         
-        # Parse mission type from string
-        mission_type_str = config_dict.get('missionType', 'CIRCLE')
-        mission_type_map = {
-            'NONE': MISSION_TYPE.NONE,
-            'WAYPOINT': MISSION_TYPE.WAYPOINT,
-            'VELOCITY': MISSION_TYPE.VELOCITY,
-            'CIRCLE': MISSION_TYPE.CIRCLE,
-            'LISSAJOUS': MISSION_TYPE.LISSAJOUS,
-            'TRACKER': MISSION_TYPE.TRACKER,
-            'SECTION': MISSION_TYPE.SECTION,
-            'SPINNING': MISSION_TYPE.SPINNING
-        }
-        self.missionType = mission_type_map.get(mission_type_str.upper(), MISSION_TYPE.CIRCLE)
-        
-        # Parse yaw control type from string
-        yaw_control_str = config_dict.get('yawControlType', 'DEFINED_DIR')
-        yaw_control_map = {
-            'NO_CONTROL': YAW_COMMAND.NO_CONTROL,
-            'DEFINED_DIR': YAW_COMMAND.DEFINED_DIR,
-            'HOLD_CUR_DIR': YAW_COMMAND.HOLD_CUR_DIR,
-            'VELOCITY_DIR': YAW_COMMAND.VELOCITY_DIR,
-            'CAMERA_DIR': YAW_COMMAND.CAMERA_DIR
-        }
-        self.yawControlType = yaw_control_map.get(yaw_control_str.upper(), YAW_COMMAND.DEFINED_DIR)
-        
-        self.yawCommandFactor = config_dict.get('yawCommandFactor', 1)
-        self.maximalVelocity = config_dict.get('maximalVelocity', 10*factor)
-        self.descentVelocity = config_dict.get('descentVelocity', 10)
-        self.targetVelocity = config_dict.get('targetVelocity', 0.75*10)
-        self.originOffset_frd = np.array(config_dict.get('originOffset_frd', [0, 0, 0]))
-        self.terminalHomingAlowed = config_dict.get('terminalHomingAlowed', True)
-        self.circleRadius = config_dict.get('circleRadius', 15*factor)
-        
-        # Parse controller type from string
-        controller_type_str = config_dict.get('primaryControllerType', 'VELOCITYRL')
-        controller_type_map = {
-            'VELOCITYPID': CONTROLLER_TYPE.VELOCITYPID,
-            'VELOCITYRL': CONTROLLER_TYPE.VELOCITYRL,
-            'ACCELERATIONPID': CONTROLLER_TYPE.ACCELERATIONPID,
-            'GEOMETRIC': CONTROLLER_TYPE.GEOMETRIC,
-            'ADAPTIVEGEOMETRIC': CONTROLLER_TYPE.ADAPTIVEGEOMETRIC,
-            'JAEYOUNG': CONTROLLER_TYPE.JAEYOUNG,
-            'BRESCIANINI': CONTROLLER_TYPE.BRESCIANINI,
-            'KOOIJMAN': CONTROLLER_TYPE.KOOIJMAN
-        }
-        self.controllerType = controller_type_map.get(controller_type_str.upper(), CONTROLLER_TYPE.VELOCITYRL)
-        
-        # Parse yaw command type from string
-        yaw_cmd_type_str = config_dict.get('yawCommandType', 'RATE')
-        yaw_cmd_type_map = {
-            'NONE': YAW_COMMAND_TYPE.NONE,
-            'ANGLE': YAW_COMMAND_TYPE.ANGLE,
-            'RATE': YAW_COMMAND_TYPE.RATE
-        }
-        self.yawCommandType = yaw_cmd_type_map.get(yaw_cmd_type_str.upper(), YAW_COMMAND_TYPE.RATE)
-        
-        # Update log_dir if provided in config
-        if 'log_dir' in config_dict:
-            self._log_dir = config_dict['log_dir']
-        
-        # Update dronemass if provided
-        if 'dronemass' in config_dict:
-            self.dronemass = config_dict['dronemass']
-        
-        self.rateControlEnabled = config_dict.get('rateControlEnabled', False)
-        
-        # Store controller parameter file paths for later use in controller initialization
-        self.primaryControllerParamsFile = config_dict.get('primaryControllerParamsFile', None)
-        self.secondaryControllerParamsFile = config_dict.get('secondaryControllerParamsFile', None)
+            # Parse mission type from string
+            mission_type_str = config_dict.get('missionType', 'CIRCLE')
+            mission_type_map = {
+                'NONE': MISSION_TYPE.NONE,
+                'WAYPOINT': MISSION_TYPE.WAYPOINT,
+                'VELOCITY': MISSION_TYPE.VELOCITY,
+                'CIRCLE': MISSION_TYPE.CIRCLE,
+                'LISSAJOUS': MISSION_TYPE.LISSAJOUS,
+                'TRACKER': MISSION_TYPE.TRACKER,
+                'SECTION': MISSION_TYPE.SECTION,
+                'SPINNING': MISSION_TYPE.SPINNING
+            }
+            self.missionType = mission_type_map.get(mission_type_str.upper(), MISSION_TYPE.CIRCLE)
+            
+            # Parse yaw control type from string
+            yaw_control_str = config_dict.get('yawControlType', 'DEFINED_DIR')
+            yaw_control_map = {
+                'NO_CONTROL': YAW_COMMAND.NO_CONTROL,
+                'DEFINED_DIR': YAW_COMMAND.DEFINED_DIR,
+                'HOLD_CUR_DIR': YAW_COMMAND.HOLD_CUR_DIR,
+                'VELOCITY_DIR': YAW_COMMAND.VELOCITY_DIR,
+                'CAMERA_DIR': YAW_COMMAND.CAMERA_DIR
+            }
+            self.yawControlType = yaw_control_map.get(yaw_control_str.upper(), YAW_COMMAND.DEFINED_DIR)
+            
+            self.yawCommandFactor = config_dict.get('yawCommandFactor', DEFAULT_YAW_COMMAND_FACTOR)
+            self.maximalVelocity = config_dict.get('maximalVelocity', DEFAULT_MAXIMAL_VELOCITY)
+            self.descentVelocity = config_dict.get('descentVelocity', DEFAULT_DESCENT_VELOCITY)
+            self.targetVelocity = config_dict.get('targetVelocity', DEFAULT_TARGET_VELOCITY)
+            self.originOffset_frd = np.array(config_dict.get('originOffset_frd', [0, 0, 0]))
+            self.terminalHomingAlowed = config_dict.get('terminalHomingAlowed', DEFAULT_TERMINAL_HOMING_ALLOWED)
+            self.circleRadius = config_dict.get('circleRadius', DEFAULT_CIRCLE_RADIUS)
+            self.loop_period = config_dict.get('loop_period', DEFAULT_LOOP_PERIOD)
+            
+            # Parse controller type from string
+            controller_type_str = config_dict.get('primaryControllerType', 'VELOCITYRL')
+            controller_type_map = {
+                'VELOCITYPID': CONTROLLER_TYPE.VELOCITYPID,
+                'VELOCITYRL': CONTROLLER_TYPE.VELOCITYRL,
+                'ACCELERATIONPID': CONTROLLER_TYPE.ACCELERATIONPID,
+                'GEOMETRIC': CONTROLLER_TYPE.GEOMETRIC,
+                'ADAPTIVEGEOMETRIC': CONTROLLER_TYPE.ADAPTIVEGEOMETRIC,
+                'JAEYOUNG': CONTROLLER_TYPE.JAEYOUNG,
+                'BRESCIANINI': CONTROLLER_TYPE.BRESCIANINI,
+                'KOOIJMAN': CONTROLLER_TYPE.KOOIJMAN
+            }
+            self.controllerType = controller_type_map.get(controller_type_str.upper(), CONTROLLER_TYPE.VELOCITYRL)
+            
+            # Parse yaw command type from string
+            yaw_cmd_type_str = config_dict.get('yawCommandType', 'RATE')
+            yaw_cmd_type_map = {
+                'NONE': YAW_COMMAND_TYPE.NONE,
+                'ANGLE': YAW_COMMAND_TYPE.ANGLE,
+                'RATE': YAW_COMMAND_TYPE.RATE
+            }
+            self.yawCommandType = yaw_cmd_type_map.get(yaw_cmd_type_str.upper(), YAW_COMMAND_TYPE.RATE)
+            
+            # Update log_dir if provided in config
+            if 'log_dir' in config_dict:
+                self._log_dir = config_dict['log_dir']
+            
+            # Update dronemass if provided
+            if 'dronemass' in config_dict:
+                self.dronemass = config_dict['dronemass']
+            
+            self.rateControlEnabled = config_dict.get('rateControlEnabled', DEFAULT_RATE_CONTROL_ENABLED)
+            
+            # Store controller parameter file paths for later use in controller initialization
+            self.primaryControllerParamsFile = config_dict.get('primaryControllerParamsFile', None)
+            self.secondaryControllerParamsFile = config_dict.get('secondaryControllerParamsFile', None)
+        except (TypeError, ValueError, KeyError) as e:
+            print(f"Error: Failed to parse parameter from config file")
+            print(f"  Parameter error: {e}")
+            print("Exiting program.")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: Unexpected error while loading configuration parameters")
+            print(f"  Error: {e}")
+            print("Exiting program.")
+            sys.exit(1)
 
 #################################################################################################################
     def _log_input_data(self,   current_ts, imu_ts,
@@ -1130,14 +1165,19 @@ def load_config_from_json(json_file_path):
         print(f"System_Manager: Loaded configuration from {json_file_path}")
         return config
     except FileNotFoundError:
-        print(f"System_Manager: Warning - Config file not found: {json_file_path}")
-        return None
+        print(f"Error: Could not open config file: {json_file_path}")
+        print("Exiting program.")
+        sys.exit(1)
     except json.JSONDecodeError as e:
-        print(f"System_Manager: Error - Invalid JSON in config file: {e}")
-        return None
+        print(f"Error: Invalid JSON in config file: {json_file_path}")
+        print(f"  JSON Error: {e}")
+        print("Exiting program.")
+        sys.exit(1)
     except Exception as e:
-        print(f"System_Manager: Error loading config file: {e}")
-        return None
+        print(f"Error: Failed to load config file: {json_file_path}")
+        print(f"  Error: {e}")
+        print("Exiting program.")
+        sys.exit(1)
 
 ############################################################################################################################
 
@@ -1162,8 +1202,7 @@ def main():
     config_file_path = args.config or args.config_file
     if config_file_path:
         config_dict = load_config_from_json(config_file_path)
-        if config_dict is None:
-            print("System_Manager: Failed to load config file, using default parameters")
+        # load_config_from_json now exits on error, so if we get here it succeeded
     
     if REAL_TIME:
         # Use log_dir from config if available, otherwise use defaults
@@ -1176,18 +1215,19 @@ def main():
         print("System_Manager initialized. Starting main loop...")
         print("System_Manager: Waiting for flight data from hardware_adapter...")
         print("System_Manager: If you see '-return-0-' messages, hardware_adapter may not be publishing data")
-        print("System_Manager: Main loop running at 100Hz...")
+        loop_period = config_dict.get('loop_period', DEFAULT_LOOP_PERIOD) if config_dict else DEFAULT_LOOP_PERIOD
+        print(f"System_Manager: Main loop running at {1.0/loop_period:.1f}Hz (period: {loop_period}s)...")
         loop_count = 0
         next_loop_time = time.monotonic()
         while True:
             # time.sleep(0.0001)
             
-            # Variable delay to maintain 100Hz loop frequency
+            # Variable delay to maintain loop frequency
             sleep_duration = next_loop_time - time.monotonic()
             if sleep_duration > 0:
                 time.sleep(sleep_duration)
             
-            next_loop_time += 0.010
+            next_loop_time += loop_period
             
             startTime = time.monotonic()
             try:

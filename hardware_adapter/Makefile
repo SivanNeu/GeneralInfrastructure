@@ -61,14 +61,14 @@ OBJ_DIR = obj              # Debug objects (default)
 OBJ_DIR_RELEASE = obj_release  # Release objects
 BIN_DIR = bin
 
-# Source files for UDP adapter (exclude Serial adapter, Serial main, regular main, example files, and mavlink_to_ZMQ files)
+# Source files for UDP adapter (exclude Serial adapter, Serial main, regular main, example files, mavlink_to_ZMQ files, serial_to_ZMQ files, and ZMQ_to_serial files)
 # Include sine_test_module.c
-UDP_SOURCES = $(filter-out hardware_adapterSerial.c mainSerial.c main.c udp_example.c mavlink_to_ZMQ.c main_mavlink_to_ZMQ.c, $(wildcard *.c))
+UDP_SOURCES = $(filter-out hardware_adapterSerial.c mainSerial.c main.c udp_example.c mavlink_to_ZMQ.c main_mavlink_to_ZMQ.c serial_to_ZMQ.c main_serial_to_ZMQ.c ZMQ_to_serial.c main_ZMQ_to_serial.c, $(wildcard *.c))
 UDP_OBJECTS = $(UDP_SOURCES:%.c=obj/%.o)              # Debug objects
 UDP_OBJECTS_RELEASE = $(UDP_SOURCES:%.c=obj_release/%.o)  # Release objects
 
-# Source files for Serial adapter (exclude UDP adapter, UDP main, regular main, example files, and mavlink_to_ZMQ files)
-SERIAL_SOURCES = $(filter-out zmq_commands_mavlink.c main_zmq_commands_mavlink.c main.c udp_example.c mavlink_to_ZMQ.c main_mavlink_to_ZMQ.c, $(wildcard *.c))
+# Source files for Serial adapter (exclude UDP adapter, UDP main, regular main, example files, mavlink_to_ZMQ files, serial_to_ZMQ files, and ZMQ_to_serial files)
+SERIAL_SOURCES = $(filter-out zmq_commands_mavlink.c main_zmq_commands_mavlink.c main.c udp_example.c mavlink_to_ZMQ.c main_mavlink_to_ZMQ.c serial_to_ZMQ.c main_serial_to_ZMQ.c ZMQ_to_serial.c main_ZMQ_to_serial.c, $(wildcard *.c))
 SERIAL_OBJECTS = $(SERIAL_SOURCES:%.c=obj/%.o)              # Debug objects
 SERIAL_OBJECTS_RELEASE = $(SERIAL_SOURCES:%.c=obj_release/%.o)  # Release objects
 
@@ -77,6 +77,18 @@ SERIAL_OBJECTS_RELEASE = $(SERIAL_SOURCES:%.c=obj_release/%.o)  # Release object
 MAVLINK_TO_ZMQ_SOURCES = mavlink_to_ZMQ.c main_mavlink_to_ZMQ.c zmq_wrapper.c common.c low_pass_filter.c
 MAVLINK_TO_ZMQ_OBJECTS = $(MAVLINK_TO_ZMQ_SOURCES:%.c=obj/%.o)              # Debug objects
 MAVLINK_TO_ZMQ_OBJECTS_RELEASE = $(MAVLINK_TO_ZMQ_SOURCES:%.c=obj_release/%.o)  # Release objects
+
+# Source files for Serial to ZMQ bridge
+# Include common dependencies: zmq_wrapper.c, common.c, low_pass_filter.c
+SERIAL_TO_ZMQ_SOURCES = serial_to_ZMQ.c main_serial_to_ZMQ.c zmq_wrapper.c common.c low_pass_filter.c
+SERIAL_TO_ZMQ_OBJECTS = $(SERIAL_TO_ZMQ_SOURCES:%.c=obj/%.o)              # Debug objects
+SERIAL_TO_ZMQ_OBJECTS_RELEASE = $(SERIAL_TO_ZMQ_SOURCES:%.c=obj_release/%.o)  # Release objects
+
+# Source files for ZMQ to Serial bridge
+# Include common dependencies: zmq_wrapper.c, common.c, command_queue.c
+ZMQ_TO_SERIAL_SOURCES = ZMQ_to_serial.c main_ZMQ_to_serial.c zmq_wrapper.c common.c command_queue.c
+ZMQ_TO_SERIAL_OBJECTS = $(ZMQ_TO_SERIAL_SOURCES:%.c=obj/%.o)              # Debug objects
+ZMQ_TO_SERIAL_OBJECTS_RELEASE = $(ZMQ_TO_SERIAL_SOURCES:%.c=obj_release/%.o)  # Release objects
 
 # Example source files
 UDP_EXAMPLE_SRC = udp_example.c
@@ -90,6 +102,10 @@ SERIAL_TARGET = $(BIN_DIR)/hardware_adapterSerial
 SERIAL_TARGET_RELEASE = $(BIN_DIR)/hardware_adapterSerial_release
 MAVLINK_TO_ZMQ_TARGET = $(BIN_DIR)/mavlink_to_ZMQ
 MAVLINK_TO_ZMQ_TARGET_RELEASE = $(BIN_DIR)/mavlink_to_ZMQ_release
+SERIAL_TO_ZMQ_TARGET = $(BIN_DIR)/serial_to_ZMQ
+SERIAL_TO_ZMQ_TARGET_RELEASE = $(BIN_DIR)/serial_to_ZMQ_release
+ZMQ_TO_SERIAL_TARGET = $(BIN_DIR)/ZMQ_to_serial
+ZMQ_TO_SERIAL_TARGET_RELEASE = $(BIN_DIR)/ZMQ_to_serial_release
 UDP_EXAMPLE_TARGET = $(BIN_DIR)/udp_example
 UDP_EXAMPLE_TARGET_RELEASE = $(BIN_DIR)/udp_example_release
 
@@ -97,7 +113,7 @@ UDP_EXAMPLE_TARGET_RELEASE = $(BIN_DIR)/udp_example_release
 all: debug
 
 # Debug build (default)
-debug: $(UDP_TARGET) $(SERIAL_TARGET) $(MAVLINK_TO_ZMQ_TARGET)
+debug: $(UDP_TARGET) $(SERIAL_TARGET) $(MAVLINK_TO_ZMQ_TARGET) $(SERIAL_TO_ZMQ_TARGET) $(ZMQ_TO_SERIAL_TARGET)
 
 # Create directories
 $(OBJ_DIR):
@@ -124,6 +140,16 @@ $(MAVLINK_TO_ZMQ_TARGET): $(MAVLINK_TO_ZMQ_OBJECTS) | $(BIN_DIR)
 	$(CC) $(MAVLINK_TO_ZMQ_OBJECTS) -o $@ $(LDFLAGS)
 	@echo "Debug build complete: $@"
 
+# Build Serial to ZMQ target (debug, default)
+$(SERIAL_TO_ZMQ_TARGET): $(SERIAL_TO_ZMQ_OBJECTS) | $(BIN_DIR)
+	$(CC) $(SERIAL_TO_ZMQ_OBJECTS) -o $@ $(LDFLAGS)
+	@echo "Debug build complete: $@"
+
+# Build ZMQ to Serial target (debug, default)
+$(ZMQ_TO_SERIAL_TARGET): $(ZMQ_TO_SERIAL_OBJECTS) | $(BIN_DIR)
+	$(CC) $(ZMQ_TO_SERIAL_OBJECTS) -o $@ $(LDFLAGS)
+	@echo "Debug build complete: $@"
+
 # Compile source files (debug, default) - pattern rule for all .c files
 obj/%.o: %.c | obj
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -137,14 +163,26 @@ debug-mavlink-to-zmq: $(MAVLINK_TO_ZMQ_TARGET)
 
 mavlink-to-zmq: $(MAVLINK_TO_ZMQ_TARGET)
 
+debug-serial-to-zmq: $(SERIAL_TO_ZMQ_TARGET)
+
+serial-to-zmq: $(SERIAL_TO_ZMQ_TARGET)
+
+debug-zmq-to-serial: $(ZMQ_TO_SERIAL_TARGET)
+
+zmq-to-serial: $(ZMQ_TO_SERIAL_TARGET)
+
 # Release build targets
-release: $(UDP_TARGET_RELEASE) $(SERIAL_TARGET_RELEASE) $(MAVLINK_TO_ZMQ_TARGET_RELEASE)
+release: $(UDP_TARGET_RELEASE) $(SERIAL_TARGET_RELEASE) $(MAVLINK_TO_ZMQ_TARGET_RELEASE) $(SERIAL_TO_ZMQ_TARGET_RELEASE) $(ZMQ_TO_SERIAL_TARGET_RELEASE)
 
 release-udp: $(UDP_TARGET_RELEASE)
 
 release-serial: $(SERIAL_TARGET_RELEASE)
 
 release-mavlink-to-zmq: $(MAVLINK_TO_ZMQ_TARGET_RELEASE)
+
+release-serial-to-zmq: $(SERIAL_TO_ZMQ_TARGET_RELEASE)
+
+release-zmq-to-serial: $(ZMQ_TO_SERIAL_TARGET_RELEASE)
 
 # Build release targets
 $(UDP_TARGET_RELEASE): $(UDP_OBJECTS_RELEASE) | $(BIN_DIR)
@@ -157,6 +195,14 @@ $(SERIAL_TARGET_RELEASE): $(SERIAL_OBJECTS_RELEASE) | $(BIN_DIR)
 
 $(MAVLINK_TO_ZMQ_TARGET_RELEASE): $(MAVLINK_TO_ZMQ_OBJECTS_RELEASE) | $(BIN_DIR)
 	$(CC) $(MAVLINK_TO_ZMQ_OBJECTS_RELEASE) -o $@ $(RELEASE_LDFLAGS)
+	@echo "Release build complete: $@"
+
+$(SERIAL_TO_ZMQ_TARGET_RELEASE): $(SERIAL_TO_ZMQ_OBJECTS_RELEASE) | $(BIN_DIR)
+	$(CC) $(SERIAL_TO_ZMQ_OBJECTS_RELEASE) -o $@ $(RELEASE_LDFLAGS)
+	@echo "Release build complete: $@"
+
+$(ZMQ_TO_SERIAL_TARGET_RELEASE): $(ZMQ_TO_SERIAL_OBJECTS_RELEASE) | $(BIN_DIR)
+	$(CC) $(ZMQ_TO_SERIAL_OBJECTS_RELEASE) -o $@ $(RELEASE_LDFLAGS)
 	@echo "Release build complete: $@"
 
 # Compile release source files - pattern rule for all .c files
@@ -194,21 +240,27 @@ install-deps:
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all                    - Build UDP, Serial, and MAVLink to ZMQ adapters (debug, default)"
+	@echo "  all                    - Build UDP, Serial, MAVLink to ZMQ, Serial to ZMQ, and ZMQ to Serial adapters (debug, default)"
 	@echo "  debug                  - Build all adapters with debug symbols (same as 'all')"
 	@echo "  debug-udp              - Build UDP adapter with debug symbols"
 	@echo "  debug-serial           - Build Serial adapter with debug symbols"
 	@echo "  debug-mavlink-to-zmq   - Build MAVLink to ZMQ bridge with debug symbols"
+	@echo "  debug-serial-to-zmq    - Build Serial to ZMQ bridge with debug symbols"
+	@echo "  debug-zmq-to-serial    - Build ZMQ to Serial bridge with debug symbols"
 	@echo "  mavlink-to-zmq         - Build MAVLink to ZMQ bridge (debug, default)"
+	@echo "  serial-to-zmq          - Build Serial to ZMQ bridge (debug, default)"
+	@echo "  zmq-to-serial          - Build ZMQ to Serial bridge (debug, default)"
 	@echo "  release                - Build all adapters (optimized)"
 	@echo "  release-udp            - Build UDP adapter (optimized)"
 	@echo "  release-serial         - Build Serial adapter (optimized)"
 	@echo "  release-mavlink-to-zmq - Build MAVLink to ZMQ bridge (optimized)"
+	@echo "  release-serial-to-zmq  - Build Serial to ZMQ bridge (optimized)"
+	@echo "  release-zmq-to-serial  - Build ZMQ to Serial bridge (optimized)"
 	@echo "  udp-example            - Build the UDP example (debug, default)"
 	@echo "  udp-example-release    - Build the UDP example (optimized)"
 	@echo "  clean                  - Remove build artifacts"
 	@echo "  install-deps           - Install required dependencies"
 	@echo "  help                   - Show this help message"
 
-.PHONY: all debug debug-udp debug-serial debug-mavlink-to-zmq mavlink-to-zmq release release-udp release-serial release-mavlink-to-zmq udp-example udp-example-release clean install-deps help
+.PHONY: all debug debug-udp debug-serial debug-mavlink-to-zmq debug-serial-to-zmq debug-zmq-to-serial mavlink-to-zmq serial-to-zmq zmq-to-serial release release-udp release-serial release-mavlink-to-zmq release-serial-to-zmq release-zmq-to-serial udp-example udp-example-release clean install-deps help
 

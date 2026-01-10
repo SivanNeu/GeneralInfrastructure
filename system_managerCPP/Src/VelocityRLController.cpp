@@ -5,9 +5,10 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <cstdlib>
 
 VelocityRLControllerParameters::VelocityRLControllerParameters(double mass) 
-    : mass(mass), max_vel(3.0), max_range(15.0), int_scale(300.0), 
+    : mass(mass), max_range(15.0), int_scale(300.0), 
       max_omega(M_PI / 2.0),
       rlFilePathVfVr(DEFAULT_RL_FILE_VFVR),
       rlFilePathOmegaYaw(DEFAULT_RL_FILE_OMEGAYAW) {
@@ -18,14 +19,13 @@ VelocityRLControllerParameters VelocityRLControllerParameters::loadFromJSON(cons
     
     JsonFile json(jsonFilePath);
     if (!json.isValid()) {
-        std::cerr << "Warning: Could not load controller parameter file: " << jsonFilePath << std::endl;
-        std::cerr << "  Using default parameters" << std::endl;
-        return params;
+        std::cerr << "Error: Could not load RL controller parameter file: " << jsonFilePath << std::endl;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
     
     // Load all parameters using JsonFile
     params.mass = json.getDouble("mass", 0.5);
-    params.max_vel = json.getDouble("max_vel", 3.0);
     params.max_range = json.getDouble("max_range", 15.0);
     params.int_scale = json.getDouble("int_scale", 300.0);
     params.max_omega = json.getDouble("max_omega", M_PI / 2.0);
@@ -46,7 +46,6 @@ VelocityRLController::VelocityRLController(const VelocityRLControllerParameters&
       pos_self(Vector3d::Zero()), vel_self(Vector3d::Zero()),
       pos_target(Vector3d::Zero()), heading_target(Vector3d::Zero()),
       vel_target(Vector3d::Zero()),
-      max_vel(params.max_vel > 0 ? params.max_vel : maximalVelocity), 
       max_range(params.max_range), 
       int_scale(params.int_scale > 0 ? params.int_scale : (params.max_range * 20.0)),
       max_omega(params.max_omega), 
@@ -67,8 +66,9 @@ VelocityRLController::VelocityRLController(const VelocityRLControllerParameters&
             rl_policyOmegaYaw = RLPolicyClean::load_from_json(params.rlFilePathOmegaYaw, "relu");
         }
     } catch (const std::exception& e) {
-        std::cerr << "Warning: Failed to load RL policies: " << e.what() << std::endl;
-        std::cerr << "RL controller will use placeholder inference" << std::endl;
+        std::cerr << "Error: Failed to load RL policy (neural network) file: " << e.what() << std::endl;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
 }
 
@@ -108,9 +108,6 @@ std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> VelocityRLController::
     if (pos_error_ned.norm() > max_range) {
         pos_error_ned = pos_error_ned / pos_error_ned.norm() * max_range;
     }
-    if (vel_error_ned.norm() > max_vel) {
-        vel_error_ned = vel_error_ned / vel_error_ned.norm() * max_vel;
-    }
     
     // Update time
     if (currentData != nullptr) {
@@ -128,11 +125,9 @@ std::tuple<Vector3d, Matrix3d, Vector3d, Eigen::VectorXd> VelocityRLController::
     
     // Execute policy inference
     auto [vf_vr, w] = rl_inference(obsXY, obsHeading);
-    double vf_ = vf_vr[0];
-    double vr_ = vf_vr[1];
+    double vf = vf_vr[0];
+    double vr = vf_vr[1];
     
-    double vf = std::max(-max_vel, std::min(max_vel, vf_));
-    double vr = std::max(-max_vel, std::min(max_vel, vr_));
     double w_clipped = std::max(-max_omega, std::min(max_omega, w));
     
     Vector3d vel_vector(vf, vr, 0);  // in FRD

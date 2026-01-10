@@ -20,6 +20,7 @@
   "primaryControllerType": "VELOCITYPID",
   "primaryControllerParamsFile": "/home/valentin/RL/src/system_managerCPP/velocity_pid_controller_params.json",
   "yawCommandType": "RATE",
-  "rateControlEnabled": false
+  "rateControlEnabled": false,
+  "loop_period": 0.03
 }
 

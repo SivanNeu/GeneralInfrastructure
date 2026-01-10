@@ -23,7 +23,6 @@ struct VelocityRLControllerParameters {
     static constexpr const char* DEFAULT_RL_FILE_OMEGAYAW = "./train_dir/rlcat2_yawrate/checkpoint_p0/best_000008610_8816640_reward_4791.792.json";
     
     double mass;
-    double max_vel;
     double max_range;
     double int_scale;
     double max_omega;
@@ -47,7 +46,6 @@ private:
     Vector3d heading_target;
     Vector3d vel_target;
     
-    double max_vel;
     double max_range;
     double int_scale;
     double max_omega;

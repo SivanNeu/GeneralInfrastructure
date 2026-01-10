@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstring>
 #include <vector>
+#include <cstdlib>
 
 JsonFile::JsonFile(const std::string& jsonFilePath) : filePath(jsonFilePath), valid(false) {
     std::ifstream file(jsonFilePath);
@@ -81,7 +82,10 @@ double JsonFile::getDouble(const std::string& key, double defaultValue) const {
         try {
             return std::stod(match[1].str());
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse double for key '" << key << "', using default" << std::endl;
+            std::cerr << "Error: Could not parse double for key '" << key << "' in JSON file: " << filePath << std::endl;
+            std::cerr << "  Parse error: " << e.what() << std::endl;
+            std::cerr << "Exiting program." << std::endl;
+            std::exit(1);
         }
     }
     return defaultValue;
@@ -122,7 +126,10 @@ Vector3d JsonFile::getVector3d(const std::string& key, const Vector3d& defaultVa
             double z = std::stod(match[3].str());
             return Vector3d(x, y, z);
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse Vector3d for key '" << key << "', using default" << std::endl;
+            std::cerr << "Error: Could not parse Vector3d for key '" << key << "' in JSON file: " << filePath << std::endl;
+            std::cerr << "  Parse error: " << e.what() << std::endl;
+            std::cerr << "Exiting program." << std::endl;
+            std::exit(1);
         }
     }
     return defaultValue;
@@ -155,8 +162,9 @@ std::vector<Vector3d> JsonFile::getVector3dArray(const std::string& key) const {
     }
     
     if (bracket_count != 0) {
-        std::cerr << "Warning: Could not find matching closing bracket for array '" << key << "'" << std::endl;
-        return result;
+        std::cerr << "Error: Could not find matching closing bracket for array '" << key << "' in JSON file: " << filePath << std::endl;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
     
     // Extract the array content
@@ -175,7 +183,10 @@ std::vector<Vector3d> JsonFile::getVector3dArray(const std::string& key) const {
             double z = std::stod(match[3].str());
             result.push_back(Vector3d(x, y, z));
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse Vector3d in array '" << key << "', skipping" << std::endl;
+            std::cerr << "Error: Could not parse Vector3d in array '" << key << "' in JSON file: " << filePath << std::endl;
+            std::cerr << "  Parse error: " << e.what() << std::endl;
+            std::cerr << "Exiting program." << std::endl;
+            std::exit(1);
         }
     }
     
@@ -198,7 +209,10 @@ Matrix3d JsonFile::getDiagonalMatrix3d(const std::string& key, const Matrix3d& d
             mat.diagonal() = Vector3d(x, y, z);
             return mat;
         } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not parse diagonal matrix for key '" << key << "', using default" << std::endl;
+            std::cerr << "Error: Could not parse diagonal matrix for key '" << key << "' in JSON file: " << filePath << std::endl;
+            std::cerr << "  Parse error: " << e.what() << std::endl;
+            std::cerr << "Exiting program." << std::endl;
+            std::exit(1);
         }
     }
     return defaultValue;

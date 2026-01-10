@@ -15,7 +15,6 @@ from math import sin, cos, pi, sqrt, atan2
 class VelocityRLControllerParameters:
     def __init__(self, mass=0.5):
         self.mass = mass  # Mass of the rover (kg)
-        self.max_vel = 3.0
         self.max_range = 15.0
         self.int_scale = 300.0
         self.max_omega = np.deg2rad(90)
@@ -34,27 +33,38 @@ class VelocityRLControllerParameters:
             VelocityRLControllerParameters object with loaded values
         """
         import json
+        import sys
         params = VelocityRLControllerParameters()
         try:
             with open(json_file_path, 'r') as f:
                 config = json.load(f)
-            params.mass = config.get('mass', 0.5)
-            params.max_vel = config.get('max_vel', 3.0)
-            params.max_range = config.get('max_range', 15.0)
-            params.int_scale = config.get('int_scale', 300.0)
-            params.max_omega = config.get('max_omega', np.deg2rad(90))
-            params.rlFilePathVfVr = config.get('rlFilePathVfVr', None)
-            params.rlFilePathOmegaYaw = config.get('rlFilePathOmegaYaw', None)
-            print(f"Loaded RL controller parameters from: {json_file_path}")
+            try:
+                params.mass = config.get('mass', 0.5)
+                params.max_range = config.get('max_range', 15.0)
+                params.int_scale = config.get('int_scale', 300.0)
+                params.max_omega = config.get('max_omega', np.deg2rad(90))
+                params.rlFilePathVfVr = config.get('rlFilePathVfVr', None)
+                params.rlFilePathOmegaYaw = config.get('rlFilePathOmegaYaw', None)
+                print(f"Loaded RL controller parameters from: {json_file_path}")
+            except (TypeError, ValueError, KeyError) as e:
+                print(f"Error: Failed to parse parameter from RL controller parameter file: {json_file_path}")
+                print(f"  Parameter error: {e}")
+                print("Exiting program.")
+                sys.exit(1)
         except FileNotFoundError:
-            print(f"Warning: Could not load controller parameter file: {json_file_path}")
-            print("  Using default parameters")
+            print(f"Error: Could not load RL controller parameter file: {json_file_path}")
+            print("Exiting program.")
+            sys.exit(1)
         except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON in controller parameter file: {e}")
-            print("  Using default parameters")
+            print(f"Error: Invalid JSON in RL controller parameter file: {json_file_path}")
+            print(f"  JSON Error: {e}")
+            print("Exiting program.")
+            sys.exit(1)
         except Exception as e:
-            print(f"Error loading controller parameter file: {e}")
-            print("  Using default parameters")
+            print(f"Error: Failed to load RL controller parameter file: {json_file_path}")
+            print(f"  Error: {e}")
+            print("Exiting program.")
+            sys.exit(1)
         return params
    
 ###############################################################################################################
@@ -83,7 +93,8 @@ class VelocityRLController:
             self.param = VelocityRLControllerParameters(mass=mass)
 
         # Use parameters from param object
-        self.max_vel = maximalVelocity if maximalVelocity is not None else self.param.max_vel
+        # Note: maximalVelocity is passed from SystemManager config, not stored here
+        # Velocity limiting is applied in Control class
         self.max_range = self.param.max_range
         self.int_scale = self.param.int_scale if self.param.int_scale > 0 else (self.max_range * 20)
         self.max_omega = self.param.max_omega
@@ -170,8 +181,7 @@ class VelocityRLController:
         vel_error_ned = self.vel_self[:2]
         if np.linalg.norm(pos_error_ned) > self.max_range:
             pos_error_ned = pos_error_ned / np.linalg.norm(pos_error_ned) * self.max_range
-        if np.linalg.norm(vel_error_ned) > self.max_vel:
-            vel_error_ned = vel_error_ned / np.linalg.norm(vel_error_ned) * self.max_vel
+        # Velocity limiting is now applied in Control class, not here
 
         # Update position integral (accumulate position error)
         self.current_time = currentData.local_ts
@@ -196,8 +206,9 @@ class VelocityRLController:
         # action_logstd = action_logits[0][2:4]
 
         vf_,vr_ = action_mean.detach().numpy()  # [v_r, v_θ, w_yaw]
-        vf = np.clip(vf_,-self.max_vel,self.max_vel)
-        vr = np.clip(vr_,-self.max_vel,self.max_vel)
+        # Velocity limiting is now applied in Control class, not here
+        vf = vf_
+        vr = vr_
 
         w  = rl_action_logitsOmegaYaw.detach().numpy()[0][0]
         w = np.clip(w,-self.max_omega,self.max_omega)

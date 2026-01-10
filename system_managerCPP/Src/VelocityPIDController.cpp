@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <cstdlib>
 
 VelocityPIDControllerParameters::VelocityPIDControllerParameters(double mass) : mass(mass) {
     double commonFactor = 2.0;
@@ -26,9 +27,9 @@ VelocityPIDControllerParameters VelocityPIDControllerParameters::loadFromJSON(co
     
     JsonFile json(jsonFilePath);
     if (!json.isValid()) {
-        std::cerr << "Warning: Could not load controller parameter file: " << jsonFilePath << std::endl;
-        std::cerr << "  Using default parameters" << std::endl;
-        return params;
+        std::cerr << "Error: Could not load PID controller parameter file: " << jsonFilePath << std::endl;
+        std::cerr << "Exiting program." << std::endl;
+        std::exit(1);
     }
     
     // Load all parameters using JsonFile
