@@ -25,7 +25,7 @@ typedef struct {
     command_type_t type;
     
     // For velocity commands
-    vec3_t vel;
+    vec3_t command;
     double yaw;
     double yaw_rate;
     quaternion_t quat_ned_bodyfrd;  // For VEL_BODY: quaternion to transform body to NED

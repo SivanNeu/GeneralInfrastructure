@@ -35,7 +35,7 @@ import argparse
 # from controlKooijman import KooijmanController
 from controlVelocityPID import VelocityPIDController
 from controlVelocityRL import VelocityRLController
-# from controlAccelerationPID import AccelerationPIDController
+from extraControllers.controlAccelerationPID import AccelerationPIDController
 # from controlJaeyoung import JaeyoungController
 from trajectories import horz_circle, pos_point, vel_point, lineConstVel, vert_circle, command_Lissajous
 
@@ -160,7 +160,8 @@ class System_Manager():
             # Use parameter file if available (from JSON config), otherwise use defaults
             main_params_file = self.primaryControllerParamsFile if hasattr(self, 'primaryControllerParamsFile') and self.primaryControllerParamsFile else None
             self._controlMain = Control(self._log_dir, controller=VelocityPIDController(mass=self.dronemass, yawCommandType=self.yawCommandType, params_file=main_params_file), maximalVelocity=self.maximalVelocity)
-            
+        elif self.controllerType == CONTROLLER_TYPE.ACCELERATIONPID:
+            self._controlMain = Control(self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
         # self._control = Control(self._log_dir, controller=AccelerationPIDController(mass=self.dronemass))
         # self._control = Control(self._log_dir, controller=GeometricController(mass=self.dronemass))
         # self._control = Control(self._log_dir, controller=AdaptiveGeometricController(mass=self.dronemass))

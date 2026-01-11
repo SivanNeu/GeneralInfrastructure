@@ -328,7 +328,7 @@ void* zmq_to_serial_zmq_reader_thread_func(void* arg) {
             
             if (deserialize_vel_cmd(data_buffer, data_len, &vel, &yaw, &yaw_rate) == 0) {
                 cmd.type = CMD_TYPE_VEL_NED;
-                cmd.vel = vel;
+                cmd.command = vel;
                 cmd.yaw = isnan(yaw) ? NAN : yaw;
                 cmd.yaw_rate = isnan(yaw_rate) ? NAN : yaw_rate;
                 command_queue_enqueue(&bridge->command_queue, &cmd);
@@ -339,7 +339,7 @@ void* zmq_to_serial_zmq_reader_thread_func(void* arg) {
             
             if (deserialize_vel_cmd(data_buffer, data_len, &vel_body, &yaw, &yaw_rate) == 0) {
                 cmd.type = CMD_TYPE_VEL_BODY;
-                cmd.vel = vel_body;  // Store body velocity
+                cmd.command = vel_body;  // Store body velocity
                 cmd.yaw = isnan(yaw) ? NAN : yaw;
                 cmd.yaw_rate = isnan(yaw_rate) ? NAN : yaw_rate;
                 
@@ -380,7 +380,7 @@ void* zmq_to_serial_mavlink_sender_thread_func(void* arg) {
                 // Send velocity command in NED frame
                 mavlink_connection_t* mconn = (mavlink_connection_t*)bridge->mavlink_connection;
                 if (mconn != NULL) {
-                    vec3_t vel = cmd.vel;
+                    vec3_t vel = cmd.command;
                     double yaw = cmd.yaw;
                     double yaw_rate = cmd.yaw_rate;
                     mavlink_send_set_position_target_local_ned(mconn, 0, 1, 0x07, NULL, &vel, NULL, yaw, yaw_rate);
@@ -390,7 +390,7 @@ void* zmq_to_serial_mavlink_sender_thread_func(void* arg) {
             
             case CMD_TYPE_VEL_BODY: {
                 // Transform body velocity to NED using stored quaternion
-                vec3_t vel_ned = quaternion_rotate_vec(&cmd.quat_ned_bodyfrd, &cmd.vel);
+                vec3_t vel_ned = quaternion_rotate_vec(&cmd.quat_ned_bodyfrd, &cmd.command);
                 mavlink_connection_t* mconn = (mavlink_connection_t*)bridge->mavlink_connection;
                 if (mconn != NULL) {
                     double yaw = cmd.yaw;

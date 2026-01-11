@@ -234,6 +234,39 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
                    ((uint32_t)(unsigned char)msg_data[3] << 24);
         }
         
+        // Check for pickle format (starts with PROTO opcode 0x80 followed by version 0x04 or 0x05)
+        // Pickle format: 0x80 (PROTO), 0x04/0x05 (version), ...
+        // Note: Cast to unsigned char to handle signed char systems
+        if (msg_size >= 2 && (unsigned char)msg_data[0] == 0x80 && 
+            ((unsigned char)msg_data[1] == 0x04 || (unsigned char)msg_data[1] == 0x05)) {
+            // This is pickled data (ACC commands are sent as pickled dictionaries)
+            static int pickle_count = 0;
+            pickle_count++;
+            
+            if (pickle_count <= 3) {
+                printf("Hardware_adapter: Received pickled data (no topic). Assuming topic=%s\n", 
+                       TOPIC_GUIDANCE_CMD_ACC);
+                printf("  This suggests ZMQ subscription filter may be stripping topic frame.\n");
+            }
+            
+            // Assume ACC command for pickled data
+            const char* assumed_topic = TOPIC_GUIDANCE_CMD_ACC;
+            size_t topic_len = strlen(assumed_topic);
+            size_t copy_len = (topic_len < topic_buffer_size - 1) ? topic_len : topic_buffer_size - 1;
+            memcpy(topic_buffer, assumed_topic, copy_len);
+            topic_buffer[copy_len] = '\0';
+            
+            // Copy data
+            size_t data_len = msg_size;
+            if (data_len > data_buffer_size) {
+                data_len = data_buffer_size;
+            }
+            memcpy(data_buffer, msg_data, data_len);
+            
+            zmq_msg_close(&topic_msg);
+            return (int)data_len;
+        }
+        
         // Check for VELC (0x56454C43) or ATTC (0x41545443) magic numbers
         if (magic == 0x56454C43 || magic == 0x41545443) {
             // This is binary serialized data without topic prefix

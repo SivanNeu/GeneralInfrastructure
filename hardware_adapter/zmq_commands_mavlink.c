@@ -70,6 +70,7 @@ static const char* mavlink_get_message_name_by_id(uint32_t msgid);
 static int deserialize_attitude_cmd(const void* data, size_t data_len, quaternion_t* quat, vec3_t* rpy_rate, 
                                      double* thrust, bool* is_rate);
 static int deserialize_vel_cmd(const void* data, size_t data_len, vec3_t* vel, double* yaw, double* yaw_rate);
+static int deserialize_acc_cmd(const void* data, size_t data_len, vec3_t* acc, double* yaw, double* yaw_rate);
 
 // Initialize hardware adapter
 int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
@@ -500,7 +501,7 @@ void* hardware_adapter_zmq_reader_thread_func(void* arg) {
             
             if (deserialize_vel_cmd(data_buffer, data_len, &vel, &yaw, &yaw_rate) == 0) {
                 cmd.type = CMD_TYPE_VEL_NED;
-                cmd.vel = vel;
+                cmd.command = vel;
                 cmd.yaw = isnan(yaw) ? NAN : yaw;
                 cmd.yaw_rate = isnan(yaw_rate) ? NAN : yaw_rate;
                 command_queue_enqueue(&adapter->command_queue, &cmd);
@@ -511,7 +512,7 @@ void* hardware_adapter_zmq_reader_thread_func(void* arg) {
             
             if (deserialize_vel_cmd(data_buffer, data_len, &vel_body, &yaw, &yaw_rate) == 0) {
                 cmd.type = CMD_TYPE_VEL_BODY;
-                cmd.vel = vel_body;  // Store body velocity
+                cmd.command = vel_body;  // Store body velocity
                 cmd.yaw = isnan(yaw) ? NAN : yaw;
                 cmd.yaw_rate = isnan(yaw_rate) ? NAN : yaw_rate;
                 
@@ -526,9 +527,29 @@ void* hardware_adapter_zmq_reader_thread_func(void* arg) {
             cmd.type = CMD_TYPE_ARM;
             command_queue_enqueue(&adapter->command_queue, &cmd);
         } else if (strcmp(topic_buffer, TOPIC_GUIDANCE_CMD_ACC) == 0) {
-            // Acceleration command - not implemented yet
-            cmd.type = CMD_TYPE_ACC;
-            // TODO: deserialize and enqueue
+            vec3_t acc;
+            double yaw, yaw_rate;
+            
+            int deserialize_result = deserialize_acc_cmd(data_buffer, data_len, &acc, &yaw, &yaw_rate);
+            if (deserialize_result == 0) {
+                cmd.type = CMD_TYPE_ACC;
+                cmd.command = acc;  // Store acceleration
+                cmd.yaw = isnan(yaw) ? NAN : yaw;
+                cmd.yaw_rate = isnan(yaw_rate) ? NAN : yaw_rate;
+                command_queue_enqueue(&adapter->command_queue, &cmd);
+                
+                static int acc_cmd_count = 0;
+                if (++acc_cmd_count % 50 == 0) {
+                    printf("Hardware_adapter: Enqueued ACC command #%d: acc=(%.2f,%.2f,%.2f), yaw=%.2f, yaw_rate=%.2f\n",
+                           acc_cmd_count, acc.data[0], acc.data[1], acc.data[2], yaw, yaw_rate);
+                }
+            } else {
+                static int acc_parse_fail_count = 0;
+                if (++acc_parse_fail_count % 100 == 0) {
+                    fprintf(stderr, "Hardware_adapter: Failed to deserialize ACC command (failure #%d, data_len=%d)\n",
+                            acc_parse_fail_count, (int)data_len);
+                }
+            }
         }
     }
     
@@ -552,7 +573,7 @@ void* hardware_adapter_mavlink_sender_thread_func(void* arg) {
                 // Send velocity command in NED frame
                 mavlink_connection_t* mconn = (mavlink_connection_t*)adapter->mavlink_connection;
                 if (mconn != NULL) {
-                    vec3_t vel = cmd.vel;
+                    vec3_t vel = cmd.command;
                     double yaw = cmd.yaw;
                     double yaw_rate = cmd.yaw_rate;
                     int result = mavlink_send_set_position_target_local_ned(mconn, 0, 1, 0x07, NULL, &vel, NULL, yaw, yaw_rate);
@@ -571,7 +592,7 @@ void* hardware_adapter_mavlink_sender_thread_func(void* arg) {
             
             case CMD_TYPE_VEL_BODY: {
                 // Transform body velocity to NED using stored quaternion
-                vec3_t vel_ned = quaternion_rotate_vec(&cmd.quat_ned_bodyfrd, &cmd.vel);
+                vec3_t vel_ned = quaternion_rotate_vec(&cmd.quat_ned_bodyfrd, &cmd.command);
                 mavlink_connection_t* mconn = (mavlink_connection_t*)adapter->mavlink_connection;
                 if (mconn != NULL) {
                     double yaw = cmd.yaw;
@@ -609,9 +630,25 @@ void* hardware_adapter_mavlink_sender_thread_func(void* arg) {
                 break;
             }
             
-            case CMD_TYPE_ACC:
-                // Not implemented
+            case CMD_TYPE_ACC: {
+                // Send acceleration command in NED frame
+                mavlink_connection_t* mconn = (mavlink_connection_t*)adapter->mavlink_connection;
+                if (mconn != NULL) {
+                    vec3_t acc = cmd.command;  // Command field contains acceleration
+                    double yaw = cmd.yaw;
+                    double yaw_rate = cmd.yaw_rate;
+                    // Send with type_mask 0x07 (ignore position) | 0x38 (ignore velocity) = 0x3F
+                    // This means we're only sending acceleration, yaw, and yaw_rate
+                    int result = mavlink_send_set_position_target_local_ned(mconn, 0, 1, 0x3F, NULL, NULL, &acc, yaw, yaw_rate);
+                    
+                    static int acc_send_count = 0;
+                    if (++acc_send_count % 50 == 0) {
+                        printf("Hardware_adapter: Sent ACC command #%d: acc=(%.2f,%.2f,%.2f), yaw=%.2f, yaw_rate=%.2f, result=%d\n",
+                               acc_send_count, acc.data[0], acc.data[1], acc.data[2], yaw, yaw_rate, result);
+                    }
+                }
                 break;
+            }
         }
     }
     
@@ -1354,6 +1391,150 @@ static int deserialize_vel_cmd(const void* data, size_t data_len, vec3_t* vel, d
     }
     if (!yaw_rate_valid) {
         *yaw_rate = NAN;
+    }
+    
+    return 0;
+}
+
+// Deserialize acceleration command from pickle format
+// The Python code sends: pickle.dumps({'accCmd': np.array([x, y, z]), 'yawCmd': yaw, 'yawRateCmd': yaw_rate, ...})
+// Numpy arrays in pickle use a special format, so we need to handle them differently
+static int deserialize_acc_cmd(const void* data, size_t data_len, vec3_t* acc, double* yaw, double* yaw_rate) {
+    if (data == NULL || acc == NULL || yaw == NULL || yaw_rate == NULL) {
+        return -1;
+    }
+    
+    // Minimum size check
+    if (data_len < 50) {
+        return -1;
+    }
+    
+    const uint8_t* buf = (const uint8_t*)data;
+    
+    // Initialize with NaN (invalid values)
+    acc->data[0] = NAN;
+    acc->data[1] = NAN;
+    acc->data[2] = NAN;
+    *yaw = NAN;
+    *yaw_rate = NAN;
+    
+    // Search for keys in the pickle data
+    const char* accCmd_key = "accCmd";
+    const char* yawCmd_key = "yawCmd";
+    const char* yawRateCmd_key = "yawRateCmd";
+    
+    // Find 'accCmd' key - numpy arrays are pickled with special format
+    // After the key, look for numpy array marker or raw float data
+    for (size_t i = 0; i < data_len - 6; i++) {
+        if (memcmp(buf + i, accCmd_key, 6) == 0) {
+            // Found key, now search for the array data
+            // Numpy arrays in pickle: may have NUMPY_ARRAY opcode or be stored as raw bytes
+            // Try multiple strategies:
+            // 1. Look for BINFLOAT opcodes (0x47) followed by doubles
+            // 2. Look for raw double values (8 bytes) that look like acceleration
+            // 3. Look for numpy array structure
+            
+            size_t search_start = i + 6;
+            size_t search_end = (search_start + 200 < data_len) ? search_start + 200 : data_len;
+            
+            // Strategy 1: Look for BINFLOAT opcodes
+            int found_count = 0;
+            for (size_t j = search_start; j < search_end - 8 && found_count < 3; j++) {
+                if (buf[j] == 0x47 && j + 8 < search_end) {
+                    double val;
+                    memcpy(&val, buf + j + 1, 8);
+                    if (val >= -100.0 && val <= 100.0) {
+                        acc->data[found_count++] = val;
+                        j += 8;
+                    }
+                }
+            }
+            
+            // Strategy 2: If we didn't find all 3 values, try looking for numpy array structure
+            // Numpy arrays in pickle protocol 4+ use: NUMPY opcode or direct array storage
+            // Look for "numpy" string which might appear in the pickle
+            if (found_count < 3) {
+                // Search for raw double values that could be the array data
+                // Numpy arrays store data as contiguous bytes
+                for (size_t j = search_start; j < search_end - 24 && found_count < 3; j++) {
+                    // Try reading 3 consecutive doubles
+                    double test_vals[3];
+                    memcpy(test_vals, buf + j, 24);
+                    // Check if all 3 look like valid acceleration values
+                    if (test_vals[0] >= -100.0 && test_vals[0] <= 100.0 &&
+                        test_vals[1] >= -100.0 && test_vals[1] <= 100.0 &&
+                        test_vals[2] >= -100.0 && test_vals[2] <= 100.0) {
+                        acc->data[0] = test_vals[0];
+                        acc->data[1] = test_vals[1];
+                        acc->data[2] = test_vals[2];
+                        found_count = 3;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    
+    // Find 'yawCmd' and extract double value
+    for (size_t i = 0; i < data_len - 6; i++) {
+        if (memcmp(buf + i, yawCmd_key, 6) == 0) {
+            size_t search_start = i + 6;
+            size_t search_end = (search_start + 100 < data_len) ? search_start + 100 : data_len;
+            
+            // Look for BINFLOAT opcode or raw double
+            for (size_t j = search_start; j < search_end - 8; j++) {
+                if (buf[j] == 0x47 && j + 8 < search_end) {
+                    double val;
+                    memcpy(&val, buf + j + 1, 8);
+                    if (val >= -6.29 && val <= 6.29) {
+                        *yaw = val;
+                        break;
+                    }
+                }
+                // Also try raw double
+                double val;
+                memcpy(&val, buf + j, 8);
+                if (val >= -6.29 && val <= 6.29 && !isnan(val) && isfinite(val)) {
+                    *yaw = val;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    
+    // Find 'yawRateCmd' and extract double value
+    for (size_t i = 0; i < data_len - 9; i++) {
+        if (memcmp(buf + i, yawRateCmd_key, 9) == 0) {
+            size_t search_start = i + 9;
+            size_t search_end = (search_start + 100 < data_len) ? search_start + 100 : data_len;
+            
+            // Look for BINFLOAT opcode or raw double
+            for (size_t j = search_start; j < search_end - 8; j++) {
+                if (buf[j] == 0x47 && j + 8 < search_end) {
+                    double val;
+                    memcpy(&val, buf + j + 1, 8);
+                    if (val >= -10.0 && val <= 10.0) {
+                        *yaw_rate = val;
+                        break;
+                    }
+                }
+                // Also try raw double
+                double val;
+                memcpy(&val, buf + j, 8);
+                if (val >= -10.0 && val <= 10.0 && !isnan(val) && isfinite(val)) {
+                    *yaw_rate = val;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    
+    // Check if we found at least acceleration values
+    if (isnan(acc->data[0]) || isnan(acc->data[1]) || isnan(acc->data[2])) {
+        return -1;  // Failed to parse
     }
     
     return 0;
