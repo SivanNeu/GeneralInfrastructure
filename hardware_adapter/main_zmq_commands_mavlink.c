@@ -15,13 +15,17 @@ static pthread_t g_sine_test_thread = 0;
 void print_help(const char* program_name) {
     printf("Hardware Adapter (UDP) - MAVLink UDP Communication Bridge\n");
     printf("\n");
-    printf("Usage: %s [OPTIONS] [LOG_DIRECTORY]\n", program_name);
+    printf("Usage: %s [OPTIONS]\n", program_name);
     printf("\n");
     printf("Options:\n");
     printf("  --help, -h              Show this help message and exit\n");
-    printf("  --address=ADDRESS        MAVLink UDP connection address\n");
-    printf("                          Format: udp:PORT (server mode) or udp:IP:PORT (client mode)\n");
+    printf("  --udp:ADDRESS           MAVLink UDP connection address\n");
+    printf("                          Format: --udp:PORT (server mode) or --udp:IP:PORT (client mode)\n");
     printf("                          (default: udp:%d)\n", MAVLINK_DEFAULT_UDP_PORT);
+    printf("  --zmq:PORT              ZMQ subscriber port number\n");
+    printf("                          (default: %d)\n", DEFAULT_ZMQ_PORT);
+    printf("  --log:DIRECTORY         Directory for log files\n");
+    printf("                          (default: ../logs/)\n");
     printf("\n");
     printf("Sine Test Module Options:\n");
     printf("  --sine-test                    Enable sine wave command test mode\n");
@@ -36,8 +40,6 @@ void print_help(const char* program_name) {
     printf("  --sine-yawrate-ampl=AMPL       Yaw rate amplitude in rad/s (default: %.1f)\n", SINE_TEST_DEFAULT_YAWRATE_AMPLITUDE);
     printf("  --sine-yawrate-freq=FREQ       Yaw rate frequency in Hz (default: %.1f)\n", SINE_TEST_DEFAULT_YAWRATE_FREQUENCY);
     printf("\n");
-    printf("Arguments:\n");
-    printf("  LOG_DIRECTORY        Directory for log files (default: ../logs/)\n");
     printf("\n");
     printf("Description:\n");
     printf("  This program acts as a bridge between the system manager and the\n");
@@ -56,12 +58,15 @@ void print_help(const char* program_name) {
     printf("  for velocity X, Y, Z and yaw rate, sending them via ZMQ to the command thread.\n");
     printf("\n");
     printf("Examples:\n");
-    printf("  %s                                    # Use defaults (../logs/, udp:%d)\n", 
-           program_name, MAVLINK_DEFAULT_UDP_PORT);
-    printf("  %s ./logs                             # Use custom log directory\n", program_name);
-    printf("  %s --address=udp:14550                # Use different UDP port (server mode)\n", program_name);
+    printf("  %s                                    # Use defaults (../logs/, udp:%d, zmq:%d)\n", 
+           program_name, MAVLINK_DEFAULT_UDP_PORT, DEFAULT_ZMQ_PORT);
+    printf("  %s --log:./logs                       # Use custom log directory\n", program_name);
+    printf("  %s --udp:14550                        # Use different UDP port (server mode)\n", program_name);
+    printf("  %s --zmq:7800                         # Use different ZMQ port\n", program_name);
+    printf("  %s --udp:14550 --zmq:7800             # Specify both MAVLink address and ZMQ port\n", program_name);
+    printf("  %s --udp:14550 --zmq:7800 --log:./logs # Specify all options\n", program_name);
     printf("  %s --sine-test --sine-duration=30     # Run sine test for 30 seconds\n", program_name);
-    printf("  %s --sine-test --sine-cmd-freq=100    # Run sine test at 100 Hz command rate\n", program_name);
+    printf("  %s --sine-test --sine-cmd-freq=100     # Run sine test at 100 Hz command rate\n", program_name);
     printf("  %s --help                             # Show this help message\n", program_name);
     printf("\n");
 }
@@ -97,6 +102,7 @@ static void* sine_test_thread_func(void* arg) {
 int main(int argc, char* argv[]) {
     const char* log_dir = "../logs/";
     const char* mavlink_address = NULL;
+    int zmq_port = 0;  // 0 means use default
     
     // Initialize sine test config with defaults
     memset(&g_sine_test_config, 0, sizeof(g_sine_test_config));
@@ -129,14 +135,54 @@ int main(int argc, char* argv[]) {
         if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
             print_help(argv[0]);
             return 0;
-        } else if (strncmp(arg, "--address", 9) == 0) {
-            if (param_value != NULL) {
-                mavlink_address = param_value;
-            } else {
-                fprintf(stderr, "Error: --address requires a value (use --address=ADDRESS)\n");
+        } else if (strncmp(arg, "--udp:", 6) == 0) {
+            // Parse --udp:address
+            const char* addr_str = arg + 6;  // Skip "--udp:"
+            if (*addr_str == '\0') {
+                fprintf(stderr, "Error: --udp: requires an address\n");
+                fprintf(stderr, "Example: --udp:14540 or --udp:192.168.1.100:14540\n");
                 fprintf(stderr, "Use --help for usage information\n");
                 return 1;
             }
+            if (mavlink_address != NULL) {
+                fprintf(stderr, "Error: Multiple MAVLink addresses specified\n");
+                fprintf(stderr, "Use --help for usage information\n");
+                return 1;
+            }
+            // Construct the address with "udp:" prefix (without the "--")
+            char addr_buf[256];
+            snprintf(addr_buf, sizeof(addr_buf), "udp:%s", addr_str);
+            mavlink_address = strdup(addr_buf);
+            if (mavlink_address == NULL) {
+                fprintf(stderr, "Failed to allocate memory for MAVLink address\n");
+                return 1;
+            }
+        } else if (strncmp(arg, "--zmq:", 6) == 0) {
+            // Parse --zmq:portnumber
+            const char* port_str = arg + 6;  // Skip "--zmq:"
+            if (*port_str == '\0') {
+                fprintf(stderr, "Error: --zmq: requires a port number\n");
+                fprintf(stderr, "Example: --zmq:7793\n");
+                fprintf(stderr, "Use --help for usage information\n");
+                return 1;
+            }
+            zmq_port = atoi(port_str);
+            if (zmq_port <= 0 || zmq_port > 65535) {
+                fprintf(stderr, "Error: Invalid ZMQ port number: %s\n", port_str);
+                fprintf(stderr, "Port must be between 1 and 65535\n");
+                fprintf(stderr, "Use --help for usage information\n");
+                return 1;
+            }
+        } else if (strncmp(arg, "--log:", 6) == 0) {
+            // Parse --log:directory
+            const char* dir_str = arg + 6;  // Skip "--log:"
+            if (*dir_str == '\0') {
+                fprintf(stderr, "Error: --log: requires a directory path\n");
+                fprintf(stderr, "Example: --log:./logs\n");
+                fprintf(stderr, "Use --help for usage information\n");
+                return 1;
+            }
+            log_dir = dir_str;
         } else if (strcmp(arg, "--sine-test") == 0) {
             g_sine_test_config.enabled = true;
         } else if (strncmp(arg, "--sine-cmd-freq", 15) == 0) {
@@ -214,8 +260,10 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "Use --help for usage information\n");
             return 1;
         } else {
-            // First non-option argument is the log directory
-            log_dir = arg;
+            fprintf(stderr, "Error: Unexpected argument: %s\n", arg);
+            fprintf(stderr, "All options must use -- prefix (e.g., --udp:, --zmq:, --log:)\n");
+            fprintf(stderr, "Use --help for usage information\n");
+            return 1;
         }
         
         // Restore '=' if we modified the string (for error messages)
@@ -243,6 +291,11 @@ int main(int argc, char* argv[]) {
             free(g_adapter);
             return 1;
         }
+    }
+    
+    // Set ZMQ port if provided
+    if (zmq_port > 0) {
+        g_adapter->zmq_port = zmq_port;
     }
     
     // Configure sine test mode if enabled
