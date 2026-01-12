@@ -50,6 +50,7 @@ typedef struct {
 } mavlink_connection_t;
 
 // Forward declarations
+static int parse_mavlink_address(const char* address, char* ip, size_t ip_size, int* port, bool* is_server_mode);
 static void* mavlink_connect(const char* address);
 static void mavlink_disconnect(void* conn);
 static int mavlink_receive_message(void* conn, char* msg_type, size_t msg_type_size, void* msg_dict, size_t msg_dict_size);
@@ -62,6 +63,7 @@ static int mavlink_send_set_attitude_target(void* conn, uint32_t time_boot_ms, u
                                             double body_yaw_rate, double thrust);
 static int mavlink_send_command_long(void* conn, uint16_t command, float param1, float param2, float param3,
                                      float param4, float param5, float param6, float param7);
+static int mavlink_wait_for_command_ack(void* conn, uint16_t expected_command, uint8_t* result_code, int timeout_ms);
 static int mavlink_wait_heartbeat(void* conn, int timeout_ms);
 static const char* mavlink_get_message_name_by_id(uint32_t msgid);
 
@@ -111,18 +113,46 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
     // Initialize mavlink
     // Use server mode (udp:MAVLINK_DEFAULT_UDP_PORT) to listen on default port, matching the working UDP example
     // This allows receiving messages from the MAVLink server which sends to the default port
-    char default_address[64];
-    snprintf(default_address, sizeof(default_address), "udp:%d", MAVLINK_DEFAULT_UDP_PORT);
-    adapter->mavlink_address = strdup(default_address);
+    // Only set default if address wasn't already provided (e.g., from command line)
     if (adapter->mavlink_address == NULL) {
-        fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
+        char default_address[64];
+        snprintf(default_address, sizeof(default_address), "udp:%d", MAVLINK_DEFAULT_UDP_PORT);
+        adapter->mavlink_address = strdup(default_address);
+        if (adapter->mavlink_address == NULL) {
+            fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
 #if ENABLE_COMMAND_PROCESSING_PAIR
-        command_queue_cleanup(&adapter->command_queue);
+            command_queue_cleanup(&adapter->command_queue);
 #endif
-        free(adapter->log_dir);
-        adapter->log_dir = NULL;
-        return -1;
+            free(adapter->log_dir);
+            adapter->log_dir = NULL;
+            return -1;
+        }
     }
+    
+    // Set default ZMQ port if not provided
+    if (adapter->zmq_port == 0) {
+        adapter->zmq_port = DEFAULT_ZMQ_PORT;
+    }
+    
+    // Validate that ZMQ port doesn't conflict with MAVLink port
+    int mavlink_port = 0;
+    char ip[64];
+    bool is_server_mode = false;
+    if (parse_mavlink_address(adapter->mavlink_address, ip, sizeof(ip), &mavlink_port, &is_server_mode) == 0) {
+        if (adapter->zmq_port == mavlink_port) {
+            fprintf(stderr, "Error: ZMQ port (%d) cannot be the same as MAVLink port (%d)\n", 
+                    adapter->zmq_port, mavlink_port);
+            free(adapter->mavlink_address);
+            adapter->mavlink_address = NULL;
+#if ENABLE_COMMAND_PROCESSING_PAIR
+            command_queue_cleanup(&adapter->command_queue);
+#endif
+            free(adapter->log_dir);
+            adapter->log_dir = NULL;
+            return -1;
+        }
+    }
+    
     if (hardware_adapter_init_mavlink(adapter) != 0) {
         fprintf(stderr, "Failed to initialize mavlink connection\n");
         adapter->init_success = false;
@@ -138,7 +168,7 @@ int hardware_adapter_init(hardware_adapter_t* adapter, const char* log_dir) {
     
     // Create ZMQ subscriber socket (only needed if command processing pair is enabled)
 #if ENABLE_COMMAND_PROCESSING_PAIR
-    adapter->sub_socket = zmq_subscriber_create(TOPIC_GUIDANCE_CMD_PORT);
+    adapter->sub_socket = zmq_subscriber_create(adapter->zmq_port);
     if (adapter->sub_socket == NULL) {
         fprintf(stderr, "Failed to create ZMQ subscriber socket\n");
         adapter->init_success = false;
@@ -526,6 +556,125 @@ void* hardware_adapter_zmq_reader_thread_func(void* arg) {
         } else if (strcmp(topic_buffer, TOPIC_GUIDANCE_CMD_ARM) == 0) {
             cmd.type = CMD_TYPE_ARM;
             command_queue_enqueue(&adapter->command_queue, &cmd);
+        } else if (strcmp(topic_buffer, TOPIC_GUIDANCE_CMD_TAKEOFF) == 0) {
+            // Parse takeoff altitude from data
+            // Supports two formats:
+            // 1. Raw double (8 bytes) - simple format
+            // 2. Pickled dictionary with 'takeoff_altitude' key - system_manager.py format
+            double takeoff_altitude = 10.0;  // Default altitude
+            
+            // Check if it's a raw double (8 bytes)
+            if (data_len == sizeof(double)) {
+                memcpy(&takeoff_altitude, data_buffer, sizeof(double));
+            } else if (data_len == sizeof(float)) {
+                // Float format (4 bytes)
+                float alt_float;
+                memcpy(&alt_float, data_buffer, sizeof(float));
+                takeoff_altitude = (double)alt_float;
+            } else {
+                // Try to parse as pickled dictionary (system_manager.py format)
+                // Look for 'takeoff_altitude' key in pickle data
+                const char* key = "takeoff_altitude";
+                const uint8_t* buf = (const uint8_t*)data_buffer;
+                bool found_key = false;
+                bool found_value = false;
+                size_t key_position = 0;
+                
+                // Search for the key
+                for (size_t i = 0; i < data_len - 15; i++) {
+                    if (memcmp(buf + i, key, 15) == 0) {
+                        found_key = true;
+                        key_position = i;
+                        break;
+                    }
+                }
+                
+                if (found_key) {
+                    // Found key, now search for the double value
+                    // In pickle format, the value typically appears after the key
+                    // Search for BINFLOAT opcodes, prioritizing those after the key
+                    double best_altitude = 10.0;  // Default
+                    size_t best_distance = SIZE_MAX;
+                    
+                    // First pass: Look for BINFLOAT opcodes, prefer those after the key
+                    for (size_t j = 0; j < data_len - 8; j++) {
+                        if (buf[j] == 0x47 && j + 8 < data_len) {
+                            // BINFLOAT opcode found, next 8 bytes are the double
+                            double val;
+                            memcpy(&val, buf + j + 1, 8);
+                            // Check if it's a reasonable altitude value (filter out timestamps which are > 1000)
+                            if (val >= 0.0 && val <= 1000.0 && !isnan(val) && isfinite(val)) {
+                                size_t distance = (j > key_position) ? (j - key_position) : SIZE_MAX;
+                                // Prefer values that appear after the key and are in reasonable altitude range (1-100m)
+                                // But accept any value in 0-1000m range
+                                if (val >= 1.0 && val <= 100.0 && j > key_position) {
+                                    // This is likely the altitude (reasonable range and after key)
+                                    takeoff_altitude = val;
+                                    found_value = true;
+                                    printf("Hardware_adapter: Parsed takeoff altitude from pickle (BINFLOAT at offset %zu): %.2fm\n", j, takeoff_altitude);
+                                    break;  // Found a good match, stop searching
+                                } else if (val >= 0.0 && val <= 1000.0) {
+                                    // Keep track of best candidate (closest to key, after key preferred)
+                                    if (j > key_position && distance < best_distance) {
+                                        best_altitude = val;
+                                        best_distance = distance;
+                                    } else if (best_distance == SIZE_MAX && j < key_position) {
+                                        // Only use value before key if we haven't found one after
+                                        best_altitude = val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    // If we found a good match (1-100m after key), use it
+                    // Otherwise use the best candidate we found
+                    if (!found_value && best_distance != SIZE_MAX) {
+                        takeoff_altitude = best_altitude;
+                        found_value = true;
+                        printf("Hardware_adapter: Parsed takeoff altitude from pickle (best candidate): %.2fm\n", takeoff_altitude);
+                    }
+                    
+                    // Strategy 2: If BINFLOAT didn't work, search for raw doubles
+                    if (!found_value) {
+                        for (size_t j = key_position; j < data_len - 8 && j < key_position + 100; j++) {
+                            double val;
+                            memcpy(&val, buf + j, 8);
+                            // Check if this looks like a valid altitude (reasonable range)
+                            if (val >= 1.0 && val <= 100.0 && !isnan(val) && isfinite(val)) {
+                                takeoff_altitude = val;
+                                found_value = true;
+                                printf("Hardware_adapter: Parsed takeoff altitude from pickle (raw double at offset %zu): %.2fm\n", j, takeoff_altitude);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    printf("Hardware_adapter: Warning: 'takeoff_altitude' key not found in pickle data (len=%zu)\n", data_len);
+                    // Try to find any reasonable double value as fallback
+                    for (size_t j = 0; j < data_len - 8; j++) {
+                        if (buf[j] == 0x47 && j + 8 < data_len) {
+                            double val;
+                            memcpy(&val, buf + j + 1, 8);
+                            if (val >= 0.0 && val <= 1000.0 && !isnan(val) && isfinite(val)) {
+                                takeoff_altitude = val;
+                                found_value = true;
+                                printf("Hardware_adapter: Found altitude value without key (BINFLOAT at %zu): %.2fm\n", j, takeoff_altitude);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (!found_value) {
+                    printf("Hardware_adapter: Warning: Could not parse altitude from pickle, using default 10.0m\n");
+                }
+            }
+            
+            cmd.type = CMD_TYPE_TAKEOFF;
+            cmd.takeoff_altitude = takeoff_altitude;
+            command_queue_enqueue(&adapter->command_queue, &cmd);
+            printf("Hardware_adapter: Enqueued TAKEOFF command with altitude %.2fm\n", takeoff_altitude);
         } else if (strcmp(topic_buffer, TOPIC_GUIDANCE_CMD_ACC) == 0) {
             vec3_t acc;
             double yaw, yaw_rate;
@@ -577,15 +726,6 @@ void* hardware_adapter_mavlink_sender_thread_func(void* arg) {
                     double yaw = cmd.yaw;
                     double yaw_rate = cmd.yaw_rate;
                     int result = mavlink_send_set_position_target_local_ned(mconn, 0, 1, 0x07, NULL, &vel, NULL, yaw, yaw_rate);
-                    static int cmd_count = 0;
-                    if (++cmd_count % 50 == 0) {  // Print every 50th command to avoid spam
-                        char send_ip[INET_ADDRSTRLEN];
-                        inet_ntop(AF_INET, &mconn->send_addr.sin_addr, send_ip, INET_ADDRSTRLEN);
-                        printf("DEBUG: Sent VEL_NED command #%d, result=%d, target_system=%d, target_component=%d, to %s:%d, vel=(%.2f,%.2f,%.2f), yaw_rate=%.2f\n",
-                               cmd_count, result, mconn->target_system, mconn->target_component, 
-                               send_ip, ntohs(mconn->send_addr.sin_port),
-                               vel.data[0], vel.data[1], vel.data[2], yaw_rate);
-                    }
                 }
                 break;
             }
@@ -647,6 +787,100 @@ void* hardware_adapter_mavlink_sender_thread_func(void* arg) {
                                acc_send_count, acc.data[0], acc.data[1], acc.data[2], yaw, yaw_rate, result);
                     }
                 }
+                break;
+            }
+            
+            case CMD_TYPE_TAKEOFF: {
+                // Execute takeoff sequence following Python pattern:
+                // 1. Get current altitude
+                // 2. Set mode to TAKEOFF
+                // 3. Send takeoff command
+                // 4. Arm the drone
+                mavlink_connection_t* mconn = (mavlink_connection_t*)adapter->mavlink_connection;
+                if (mconn == NULL) {
+                    fprintf(stderr, "Hardware_adapter: Cannot execute takeoff - no MAVLink connection\n");
+                    break;
+                }
+                
+                printf("Hardware_adapter: Starting takeoff sequence (altitude: %.2fm)\n", cmd.takeoff_altitude);
+                
+                // Step 1: Try to get current altitude from GLOBAL_POSITION_INT
+                // We'll try to receive a message with a short timeout
+                double starting_alt = 0.0;
+                char msg_type[64];
+                char msg_dict[1024];
+                
+                // Try to receive GLOBAL_POSITION_INT (non-blocking, try a few times)
+                int attempts = 0;
+                while (attempts < 10) {
+                    int result = mavlink_receive_message(mconn, msg_type, sizeof(msg_type), msg_dict, sizeof(msg_dict));
+                    if (result == 0 && strcmp(msg_type, "GLOBAL_POSITION_INT") == 0) {
+                        mavlink_message_t* msg = (mavlink_message_t*)msg_dict;
+                        mavlink_global_position_int_t global_pos;
+                        mavlink_msg_global_position_int_decode(msg, &global_pos);
+                        starting_alt = global_pos.alt / 1000.0;  // Convert from mm to meters
+                        printf("Hardware_adapter: Current altitude: %.2fm\n", starting_alt);
+                        break;
+                    }
+                    usleep(100000);  // 100ms between attempts
+                    attempts++;
+                }
+                
+                if (attempts >= 10) {
+                    printf("Hardware_adapter: Warning: Could not get current altitude, using 0 as baseline\n");
+                }
+                
+                double target_altitude = starting_alt + cmd.takeoff_altitude;
+                printf("Hardware_adapter: Target altitude: %.2fm (current: %.2fm + takeoff: %.2fm)\n",
+                       target_altitude, starting_alt, cmd.takeoff_altitude);
+                
+                // Step 2: Set mode to TAKEOFF
+                // For PX4, TAKEOFF mode ID is typically 4 (from Python output)
+                // MAV_CMD_DO_SET_MODE = 176
+                // param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED = 1
+                // param2 = mode_id = 4 (TAKEOFF)
+                printf("Hardware_adapter: Setting mode to TAKEOFF...\n");
+                mavlink_send_command_long(mconn, 176, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                
+                // Wait for mode change ACK
+                uint8_t mode_ack_result = 0;
+                if (mavlink_wait_for_command_ack(mconn, 176, &mode_ack_result, 3000) == 0) {
+                    printf("Hardware_adapter: Mode change ACK received, result=%d\n", mode_ack_result);
+                } else {
+                    printf("Hardware_adapter: Warning: Mode change ACK timeout\n");
+                }
+                usleep(1000000);  // 1 second delay
+                
+                // Step 3: Send takeoff command
+                // MAV_CMD_NAV_TAKEOFF = 22
+                // Parameters: [0, 0, 0, 0, NaN, NaN, target_altitude]
+                printf("Hardware_adapter: Sending takeoff command...\n");
+                // Use NAN from math.h for NaN values
+                mavlink_send_command_long(mconn, 22, 0.0, 0.0, 0.0, 0.0, NAN, NAN, (float)target_altitude);
+                usleep(1000000);  // 1 second delay (Python script doesn't wait for ACK here)
+                
+                // Step 4: Arm the drone
+                // MAV_CMD_COMPONENT_ARM_DISARM = 400
+                // param1 = 1 (arm)
+                printf("Hardware_adapter: Arming drone...\n");
+                mavlink_send_command_long(mconn, 400, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                
+                // Wait for arm ACK
+                uint8_t arm_ack_result = 0;
+                if (mavlink_wait_for_command_ack(mconn, 400, &arm_ack_result, 3000) == 0) {
+                    printf("Hardware_adapter: Arm ACK received, result=%d\n", arm_ack_result);
+                    if (arm_ack_result != 0) {  // 0 = MAV_RESULT_ACCEPTED
+                        printf("Hardware_adapter: Warning: Arm command failed with result=%d\n", arm_ack_result);
+                    }
+                } else {
+                    printf("Hardware_adapter: Warning: Arm ACK timeout\n");
+                }
+                
+                // Wait 15 seconds like Python script
+                printf("Hardware_adapter: Waiting 15 seconds for takeoff...\n");
+                usleep(15000000);  // 15 seconds
+                
+                printf("Hardware_adapter: Takeoff sequence completed\n");
                 break;
             }
         }
@@ -910,13 +1144,6 @@ static int mavlink_receive_message(void* conn, char* msg_type, size_t msg_type_s
         mconn->send_addr.sin_port = src_addr.sin_port;  // Send to the same port we receive FROM
         inet_ntop(AF_INET, &mconn->send_addr.sin_addr, new_ip, INET_ADDRSTRLEN);
         uint16_t new_port = ntohs(mconn->send_addr.sin_port);
-        // Debug: print when send address is updated (only first time to avoid spam)
-        static bool send_addr_updated = false;
-        if (!send_addr_updated) {
-            printf("DEBUG: Updated send address from %s:%d to %s:%d (using source port from received messages)\n", 
-                   old_ip, old_port, new_ip, new_port);
-            send_addr_updated = true;
-        }
     }
     
     if (recv_len < MAVLINK_NUM_HEADER_BYTES) {
@@ -1200,6 +1427,45 @@ static int mavlink_send_command_long(void* conn, uint16_t command, float param1,
     }
     
     return (sent == len) ? 0 : -1;
+}
+
+// Wait for COMMAND_ACK message with specific command ID
+// Returns: 0 on success (ACK received), -1 on timeout or error
+// result_code: output parameter for the ACK result code (MAV_RESULT_ACCEPTED, etc.)
+static int mavlink_wait_for_command_ack(void* conn, uint16_t expected_command, uint8_t* result_code, int timeout_ms) {
+    if (conn == NULL || result_code == NULL) {
+        return -1;
+    }
+    
+    mavlink_connection_t* mconn = (mavlink_connection_t*)conn;
+    if (mconn->fd < 0) {
+        return -1;
+    }
+    
+    char msg_type[64];
+    char msg_dict[1024];
+    int attempts = 0;
+    int max_attempts = timeout_ms / 100;  // Check every 100ms
+    
+    while (attempts < max_attempts) {
+        int result = mavlink_receive_message(mconn, msg_type, sizeof(msg_type), msg_dict, sizeof(msg_dict));
+        if (result == 0 && strcmp(msg_type, "COMMAND_ACK") == 0) {
+            mavlink_message_t* msg = (mavlink_message_t*)msg_dict;
+            mavlink_command_ack_t ack;
+            mavlink_msg_command_ack_decode(msg, &ack);
+            
+            // Check if this ACK is for the command we're waiting for
+            if (ack.command == expected_command) {
+                *result_code = ack.result;
+                return 0;  // Success - got the ACK we were waiting for
+            }
+            // Otherwise, continue waiting (might be ACK for a different command)
+        }
+        usleep(100000);  // 100ms between attempts
+        attempts++;
+    }
+    
+    return -1;  // Timeout
 }
 
 static int mavlink_wait_heartbeat(void* conn, int timeout_ms) {

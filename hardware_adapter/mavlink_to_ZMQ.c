@@ -59,6 +59,9 @@ static const char* mavlink_get_message_name_by_id(uint32_t msgid);
 static size_t flight_data_serialize(const flight_data_t* fd, void* buffer, size_t buffer_size);
 static int flight_data_deserialize(flight_data_t* fd, const void* buffer, size_t buffer_size);
 
+// Forward declaration
+static int parse_mavlink_address(const char* address, char* ip, size_t ip_size, int* port, bool* is_server_mode);
+
 // Initialize mavlink to ZMQ bridge
 int mavlink_to_zmq_init(mavlink_to_zmq_t* bridge, const char* log_dir) {
     if (bridge == NULL) {
@@ -106,14 +109,42 @@ int mavlink_to_zmq_init(mavlink_to_zmq_t* bridge, const char* log_dir) {
     // Initialize mavlink
     // Use server mode (udp:14540) to listen on port 14540, matching the working UDP example
     // This allows receiving messages from the MAVLink server which sends to port 14540
-    bridge->mavlink_address = strdup("udp:14540");
+    // Only set default if address wasn't already provided (e.g., from command line)
     if (bridge->mavlink_address == NULL) {
-        fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
-        pthread_mutex_destroy(&bridge->data_lock);
-        free(bridge->log_dir);
-        bridge->log_dir = NULL;
-        return -1;
+        char default_addr[32];
+        snprintf(default_addr, sizeof(default_addr), "udp:%d", DEFAULT_MAVLINK_UDP_PORT);
+        bridge->mavlink_address = strdup(default_addr);
+        if (bridge->mavlink_address == NULL) {
+            fprintf(stderr, "Failed to allocate memory for mavlink_address\n");
+            pthread_mutex_destroy(&bridge->data_lock);
+            free(bridge->log_dir);
+            bridge->log_dir = NULL;
+            return -1;
+        }
     }
+    
+    // Set default ZMQ port if not provided
+    if (bridge->zmq_port == 0) {
+        bridge->zmq_port = DEFAULT_ZMQ_PORT;
+    }
+    
+    // Validate that ZMQ port doesn't conflict with MAVLink port
+    int mavlink_port = 0;
+    char ip[64];
+    bool is_server_mode = false;
+    if (parse_mavlink_address(bridge->mavlink_address, ip, sizeof(ip), &mavlink_port, &is_server_mode) == 0) {
+        if (bridge->zmq_port == mavlink_port) {
+            fprintf(stderr, "Error: ZMQ port (%d) cannot be the same as MAVLink port (%d)\n", 
+                    bridge->zmq_port, mavlink_port);
+            free(bridge->mavlink_address);
+            bridge->mavlink_address = NULL;
+            pthread_mutex_destroy(&bridge->data_lock);
+            free(bridge->log_dir);
+            bridge->log_dir = NULL;
+            return -1;
+        }
+    }
+    
     if (mavlink_to_zmq_init_mavlink(bridge) != 0) {
         fprintf(stderr, "Failed to initialize mavlink connection\n");
         bridge->init_success = false;
@@ -126,7 +157,7 @@ int mavlink_to_zmq_init(mavlink_to_zmq_t* bridge, const char* log_dir) {
     }
     
     // Create ZMQ publisher socket
-    bridge->pub_socket = zmq_publisher_create(TOPIC_MAVLINK_PORT);
+    bridge->pub_socket = zmq_publisher_create(bridge->zmq_port);
     if (bridge->pub_socket == NULL) {
         fprintf(stderr, "Failed to create ZMQ publisher socket\n");
         bridge->init_success = false;
@@ -158,7 +189,7 @@ int mavlink_to_zmq_init(mavlink_to_zmq_t* bridge, const char* log_dir) {
     }
     
     printf("MAVLink to ZMQ bridge started successfully\n");
-    printf("Publishing to topic: %s on port: %d\n", TOPIC_MAVLINK_FLIGHT_DATA, TOPIC_MAVLINK_PORT);
+    printf("Publishing to topic: %s on port: %d\n", TOPIC_MAVLINK_FLIGHT_DATA, bridge->zmq_port);
     
     return 0;
 }
@@ -528,7 +559,7 @@ static int parse_mavlink_address(const char* address, char* ip, size_t ip_size, 
     
     // Default values
     strncpy(ip, "127.0.0.1", ip_size);
-    *port = 14540;
+    *port = DEFAULT_MAVLINK_UDP_PORT;
     *is_server_mode = false;
     
     // Check if it starts with "udp:"

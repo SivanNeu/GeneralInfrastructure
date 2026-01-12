@@ -17,7 +17,8 @@ typedef enum {
     CMD_TYPE_ATTITUDE,     // Attitude command (quaternion)
     CMD_TYPE_ATTITUDE_RATE, // Attitude rate command
     CMD_TYPE_ARM,          // Arm command
-    CMD_TYPE_ACC           // Acceleration command (not implemented)
+    CMD_TYPE_ACC,          // Acceleration command
+    CMD_TYPE_TAKEOFF       // Takeoff command
 } command_type_t;
 
 // Command structure - contains all data needed to send a command
@@ -35,6 +36,9 @@ typedef struct {
     vec3_t rpy_rate;
     double thrust;
     bool is_rate;  // true for rate command, false for quaternion command
+    
+    // For takeoff command
+    double takeoff_altitude;  // Desired takeoff altitude in meters
 } command_t;
 
 // Thread-safe command queue

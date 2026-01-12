@@ -19,6 +19,7 @@
 #define PUBLISH_FREQ_HZ 500
 #define PUBLISH_DT (1.0 / PUBLISH_FREQ_HZ)
 #define MAVLINK_DEFAULT_UDP_PORT 14030
+#define DEFAULT_ZMQ_PORT 7793
 
 // Process pair enable/disable defines
 // Pair 2: Process 3 (ZMQ reader) + Process 4 (MAVLink sender)
@@ -53,6 +54,9 @@ typedef struct {
     
     // Mavlink address
     char* mavlink_address;
+    
+    // ZMQ port
+    int zmq_port;
 } hardware_adapter_t;
 
 // Function declarations

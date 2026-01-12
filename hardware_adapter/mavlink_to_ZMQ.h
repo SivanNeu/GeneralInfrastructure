@@ -19,6 +19,10 @@
 #define PUBLISH_FREQ_HZ 500
 #define PUBLISH_DT (1.0 / PUBLISH_FREQ_HZ)
 
+// Default port definitions
+#define DEFAULT_MAVLINK_UDP_PORT 14540
+#define DEFAULT_ZMQ_PORT 7790
+
 // MAVLink to ZMQ bridge structure
 typedef struct {
     char* log_dir;
@@ -53,6 +57,9 @@ typedef struct {
     
     // Mavlink address
     char* mavlink_address;
+    
+    // ZMQ port
+    int zmq_port;
 } mavlink_to_zmq_t;
 
 // Function declarations

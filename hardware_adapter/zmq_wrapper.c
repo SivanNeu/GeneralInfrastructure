@@ -191,14 +191,6 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
         return -1;
     }
     
-    // Debug: Log first few successful receives to verify messages are coming through
-    static int first_receive_count = 0;
-    if (first_receive_count < 3) {
-        size_t msg_size = zmq_msg_size(&topic_msg);
-        printf("Hardware_adapter: DEBUG - Received message frame #%d, size=%zu bytes\n", first_receive_count + 1, msg_size);
-        first_receive_count++;
-    }
-    
     // Check if there's more data (multipart message)
     // Note: ZMQ_RCVMORE must be checked on the MESSAGE, not the socket
     int more = 0;
@@ -207,15 +199,6 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
     
     // Also check the message itself for multipart flag
     int msg_more = zmq_msg_more(&topic_msg);
-    
-    // Debug: Log message format for first few messages
-    static int format_debug_count = 0;
-    if (format_debug_count < 5) {
-        size_t msg_size = zmq_msg_size(&topic_msg);
-        printf("Hardware_adapter: DEBUG - Frame #%d: size=%zu, socket_RCVMORE=%d, msg_more=%d\n", 
-               format_debug_count + 1, msg_size, more, msg_more);
-        format_debug_count++;
-    }
     
     if (!more && !msg_more) {
         // Single-part message - could be legacy format or data-only frame
@@ -239,18 +222,39 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
         // Note: Cast to unsigned char to handle signed char systems
         if (msg_size >= 2 && (unsigned char)msg_data[0] == 0x80 && 
             ((unsigned char)msg_data[1] == 0x04 || (unsigned char)msg_data[1] == 0x05)) {
-            // This is pickled data (ACC commands are sent as pickled dictionaries)
-            static int pickle_count = 0;
-            pickle_count++;
+            // This is pickled data - need to determine which command type by searching for keys
+            // Search for command-specific keys in the pickle data
+            const char* takeoff_key = "takeoff_altitude";
+            const char* acc_key = "accCmd";
+            const char* arm_key = "arm";  // ARM commands might also be pickled
             
-            if (pickle_count <= 3) {
-                printf("Hardware_adapter: Received pickled data (no topic). Assuming topic=%s\n", 
-                       TOPIC_GUIDANCE_CMD_ACC);
-                printf("  This suggests ZMQ subscription filter may be stripping topic frame.\n");
+            const char* assumed_topic = NULL;
+            
+            // Check for takeoff command key
+            for (size_t i = 0; i < msg_size - 15; i++) {
+                if (memcmp(msg_data + i, takeoff_key, 15) == 0) {
+                    assumed_topic = TOPIC_GUIDANCE_CMD_TAKEOFF;
+                    break;
+                }
             }
             
-            // Assume ACC command for pickled data
-            const char* assumed_topic = TOPIC_GUIDANCE_CMD_ACC;
+            // If not takeoff, check for ACC command key
+            if (assumed_topic == NULL) {
+                for (size_t i = 0; i < msg_size - 6; i++) {
+                    if (memcmp(msg_data + i, acc_key, 6) == 0) {
+                        assumed_topic = TOPIC_GUIDANCE_CMD_ACC;
+                        break;
+                    }
+                }
+            }
+            
+            // Default to ACC if we can't determine (backward compatibility)
+            if (assumed_topic == NULL) {
+                assumed_topic = TOPIC_GUIDANCE_CMD_ACC;
+            }
+            
+            
+            // Use detected topic
             size_t topic_len = strlen(assumed_topic);
             size_t copy_len = (topic_len < topic_buffer_size - 1) ? topic_len : topic_buffer_size - 1;
             memcpy(topic_buffer, assumed_topic, copy_len);
@@ -308,13 +312,15 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
             TOPIC_GUIDANCE_CMD_VEL_NED,
             TOPIC_GUIDANCE_CMD_VEL_BODY,
             TOPIC_GUIDANCE_CMD_ACC,
-            TOPIC_GUIDANCE_CMD_ARM
+            TOPIC_GUIDANCE_CMD_ARM,
+            TOPIC_GUIDANCE_CMD_TAKEOFF,
+            TOPIC_GUIDANCE_CMD_LAND
         };
         
         const char* found_topic = NULL;
         size_t topic_len = 0;
         
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 7; i++) {
             size_t len = strlen(topics[i]);
             if (msg_size >= len && memcmp(msg_data, topics[i], len) == 0) {
                 found_topic = topics[i];
@@ -324,6 +330,83 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
         }
         
         if (found_topic == NULL) {
+            // Check if this is an 8-byte message (could be takeoff altitude as double)
+            // This happens when ZMQ filters out the topic frame for takeoff/land commands
+            if (msg_size == sizeof(double)) {
+                // This is likely a takeoff or land command with just the altitude/parameter
+                // Since we can't distinguish without the topic, we'll try to receive a second frame
+                // in case it's actually a multipart message
+                zmq_msg_t data_msg;
+                zmq_msg_init(&data_msg);
+                int second_result = zmq_msg_recv(&data_msg, socket, ZMQ_DONTWAIT);
+                
+                if (second_result >= 0) {
+                    // We got a second frame - the first was actually the topic!
+                    // This means the topic frame was received but RCVMORE was wrong
+                    size_t topic_size = zmq_msg_size(&topic_msg);
+                    size_t data_size = zmq_msg_size(&data_msg);
+                    
+                    // First frame should be topic, second should be data
+                    const char* topic_candidate = (const char*)zmq_msg_data(&topic_msg);
+                    const char* data_candidate = (const char*)zmq_msg_data(&data_msg);
+                    
+                    // Check if first frame looks like a topic string
+                    bool looks_like_topic = false;
+                    for (size_t i = 0; i < topic_size && i < 50; i++) {
+                        if (topic_candidate[i] >= 32 && topic_candidate[i] < 127) {
+                            looks_like_topic = true;
+                        } else if (topic_candidate[i] != 0) {
+                            looks_like_topic = false;
+                            break;
+                        }
+                    }
+                    
+                    if (looks_like_topic && data_size == sizeof(double)) {
+                        // First frame is topic, second is data (altitude)
+                        // Verify topic matches expected topics
+                        const char* topics_check[] = {
+                            TOPIC_GUIDANCE_CMD_TAKEOFF,
+                            TOPIC_GUIDANCE_CMD_LAND
+                        };
+                        
+                        for (int i = 0; i < 2; i++) {
+                            size_t len = strlen(topics_check[i]);
+                            if (topic_size == len && memcmp(topic_candidate, topics_check[i], len) == 0) {
+                                // Found matching topic
+                                size_t copy_len = (len < topic_buffer_size - 1) ? len : topic_buffer_size - 1;
+                                memcpy(topic_buffer, topics_check[i], copy_len);
+                                topic_buffer[copy_len] = '\0';
+                                
+                                size_t data_copy_len = (data_size < data_buffer_size) ? data_size : data_buffer_size;
+                                memcpy(data_buffer, data_candidate, data_copy_len);
+                                
+                                zmq_msg_close(&topic_msg);
+                                zmq_msg_close(&data_msg);
+                                return (int)data_copy_len;
+                            }
+                        }
+                    }
+                    
+                    // If we got here, the frames might be swapped or something else
+                    zmq_msg_close(&data_msg);
+                }
+                
+                // If no second frame or it didn't match, assume it's takeoff altitude
+                // (8 bytes = double, which matches takeoff/land parameter format)
+            // Assume takeoff command (most common use case)
+            size_t topic_len = strlen(TOPIC_GUIDANCE_CMD_TAKEOFF);
+            size_t copy_len = (topic_len < topic_buffer_size - 1) ? topic_len : topic_buffer_size - 1;
+            memcpy(topic_buffer, TOPIC_GUIDANCE_CMD_TAKEOFF, copy_len);
+            topic_buffer[copy_len] = '\0';
+            
+            // Copy the 8-byte double data
+            size_t data_copy_len = (msg_size < data_buffer_size) ? msg_size : data_buffer_size;
+            memcpy(data_buffer, msg_data, data_copy_len);
+                
+                zmq_msg_close(&topic_msg);
+                return (int)data_copy_len;
+            }
+            
             // Debug: Log ALL unmatched messages
             static int unmatched_count = 0;
             unmatched_count++;
@@ -367,11 +450,13 @@ int zmq_subscriber_receive(void* socket, char* topic_buffer, size_t topic_buffer
         TOPIC_GUIDANCE_CMD_VEL_NED,
         TOPIC_GUIDANCE_CMD_VEL_BODY,
         TOPIC_GUIDANCE_CMD_ACC,
-        TOPIC_GUIDANCE_CMD_ARM
+        TOPIC_GUIDANCE_CMD_ARM,
+        TOPIC_GUIDANCE_CMD_TAKEOFF,
+        TOPIC_GUIDANCE_CMD_LAND
     };
     
     const char* found_topic = NULL;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         size_t len = strlen(topics[i]);
         if (topic_size == len && memcmp(topic_data, topics[i], len) == 0) {
             found_topic = topics[i];
