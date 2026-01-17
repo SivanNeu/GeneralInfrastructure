@@ -22,12 +22,12 @@ sleep 1
 # Run first program in left pane (pane 0)
 tmux select-pane -t 0
 tmux send-keys "cd $PROJECT_PATH" ENTER
-tmux send-keys "$PROJECT_PATH/src/hardware_adapter/bin/mavlink_to_ZMQ" ENTER
+tmux send-keys "$PROJECT_PATH/hardware_adapter/mavlink_to_ZMQ" ENTER
 
 # Run second program in right pane (pane 1)
 tmux select-pane -t 1
 tmux send-keys "cd $PROJECT_PATH" ENTER
-tmux send-keys "$PROJECT_PATH/src/hardware_adapter/bin/zmq_commands_mavlink" ENTER
+tmux send-keys "$PROJECT_PATH/hardware_adapter/zmq_commands_mavlink" ENTER
 
 # Select the first pane and attach to session
 tmux select-pane -t 0
