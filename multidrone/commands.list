@@ -1,0 +1,21 @@
+python arm_and_takeoff.py --udp:14541
+python arm_and_takeoff.py --udp:14542
+
+python arm_and_takeoff.py --udp:14031
+python arm_and_takeoff.py --udp:14032
+
+./simpleZMQtakeoff.py --zmq=7701
+./simpleZMQtakeoff.py --zmq=7702
+
+python ./system_managerPY/system_manager.py ./Input/velPIDcontrol.json --zmqcommand=7701 --zmqstate=8801
+python ./system_managerPY/system_manager.py ./Input/velPIDcontrol.json --zmqcommand=7702 --zmqstate=8802
+
+python ./simpleMavlinkSwitchTo.py --state=OFFBOARD --udp=14541
+python ./simpleMavlinkSwitchTo.py --state=OFFBOARD --udp=14542
+
+python ./simpleMavlinkSwitchTo.py --state=HOLD --udp=14541
+python ./simpleMavlinkSwitchTo.py --state=HOLD --udp=14542
+
+
+./SystemManagerMain ./Input/velPIDcontrol.json --zmqcommand=7701 --zmqstate=8801
+./SystemManagerMain ./Input/velPIDcontrol.json --zmqcommand=7702 --zmqstate=8802

@@ -3,6 +3,9 @@
 # This script starts the Docker container and automatically runs the simulation
 # based on positions defined in positions.txt
 
+# Get script directory to make paths invariant to project location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 CONTAINER_NAME="px4-noetic-sim-ros"
 
 # Setup X11 forwarding
@@ -19,8 +22,8 @@ docker run -it --net=host \
            --env="DISPLAY=$DISPLAY" \
            --env="QT_X11_NO_MITSHM=1" \
            --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-           --volume="/home/valentin/RL/src/multidrone/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw" \
-           --volume="/home/valentin/RL/src/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw" \
+           --volume="${SCRIPT_DIR}/multidrone/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw" \
+           --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw" \
            --name=${CONTAINER_NAME} \
            ${CONTAINER_NAME} \
            /bin/bash -c "./Tools/simulation/gazebo-classic/sitl_multiple_run2.sh ./Tools/simulation/positions.txt"

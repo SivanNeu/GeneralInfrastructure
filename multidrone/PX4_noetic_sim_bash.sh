@@ -1,5 +1,8 @@
 CONTAINER_NAME="px4-noetic-sim-ros"
 
+# Get script directory to make paths invariant to project location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 xhost +
 xhost +local:docker
 # Remove existing container if it exists
@@ -10,8 +13,8 @@ docker run -it --net=host \
                --env="DISPLAY=$DISPLAY" \
                --env="QT_X11_NO_MITSHM=1" \
                --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-               --volume="/home/valentin/RL/src/multidrone/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw" \
-               --volume="/home/valentin/RL/src/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw" \
+               --volume="${SCRIPT_DIR}/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw" \
+               --volume="${SCRIPT_DIR}/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw" \
                --name=${CONTAINER_NAME} \
                ${CONTAINER_NAME}
             #    --env="XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" \
