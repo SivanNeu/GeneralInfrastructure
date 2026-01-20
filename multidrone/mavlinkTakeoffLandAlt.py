@@ -118,26 +118,81 @@ def land_px4(master):
         print("Land command failed or no ACK received.")
         return False
 
+def set_altitude_px4(master, altitude):
+    """
+    Set the drone's altitude.
+    Sends MAV_CMD_DO_REPOSITION in Global frame.
+    """
+    print(f"Sending SET_ALTITUDE command: {altitude}m...")
+    
+    # To set altitude reliably, we get current global position
+    msg = master.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=5)
+    if not msg:
+        print("Error: Could not get global position for altitude change.")
+        return False
+        
+    ground_msl_alt = (msg.alt - msg.relative_alt) / 1000.0
+    target_msl_alt = ground_msl_alt + altitude
+    
+    print(f"Target MSL altitude: {target_msl_alt:.2f}m (Ground MSL: {ground_msl_alt:.2f}m + {altitude}m)")
+
+    # For PX4, MAV_CMD_NAV_TAKEOFF (22) often works well for altitude updates
+    # param7 is target absolute (MSL) altitude
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        22, # NAV_TAKEOFF
+        0,
+        0, 0, 0, 0, float("NAN"), float("NAN"),
+        float(target_msl_alt)
+    )
+    
+    ack_msg = master.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
+    print(f"Set Altitude ACK: {ack_msg}")
+    
+    if ack_msg and ack_msg.result == 0:
+        print("Set altitude command accepted.")
+        return True
+    else:
+        print("Set altitude command failed or no ACK received.")
+        return False
+
 def main():
     """Main function to connect, arm, and takeoff or land."""
     parser = argparse.ArgumentParser(
-        description="Send takeoff or land commands via MAVLink UDP.",
+        description="Send takeoff, land, or set altitude commands via MAVLink UDP.",
         epilog="""Examples:
   %(prog)s --takeoff --altitude=15.5   # Takeoff to 15.5 meters
   %(prog)s --land --udp=14542           # Land command on port 14542
-  %(prog)s --takeoff --altitude=20.0 --udp=14541""",
+  %(prog)s --altitude=10.0 --udp=14541  # Set altitude to 10.0m""",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
-    # Command group: Ensure at least one command is given
-    group = parser.add_mutually_exclusive_group(required=True)
+    # Command group: Make optional to allow altitude-only commands
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument('--takeoff', action='store_true', help='Send takeoff command')
     group.add_argument('--land', action='store_true', help='Send land command')
 
-    parser.add_argument('--altitude', type=float, default=10.0, help='Altitude for takeoff (default: 10.0m)')
-    parser.add_argument('--udp', dest='udp_port', type=int, default=14541, help='UDP port (default: 14541)')
+    parser.add_argument('--altitude', type=float, default=10.0, metavar='ALTITUDE', help='Altitude for takeoff/set (default: 10.0m)')
+    parser.add_argument('--udp', dest='udp_port', type=int, default=14541, metavar='PORT', help='UDP port (default: 14541)')
+
+    # Strict argument pattern enforcement (--name=value)
+    for arg in sys.argv[1:]:
+        if arg.startswith('--altitude') and '=' not in arg and len(arg) == 10:
+             print("Error: --altitude must be passed as --altitude=VALUE")
+             sys.exit(1)
+        if arg.startswith('--udp') and '=' not in arg and len(arg) == 5:
+             print("Error: --udp must be passed as --udp=VALUE")
+             sys.exit(1)
 
     args = parser.parse_args()
+
+    # Determine command
+    altitude_provided = any(arg.startswith('--altitude') for arg in sys.argv)
+    
+    if not (args.takeoff or args.land or altitude_provided):
+        parser.print_help()
+        sys.exit(0)
 
     print("=" * 60)
     print("MAVLink Command Sender")
@@ -158,7 +213,7 @@ def main():
             print("\nLanding command sent successfully!")
             print("Monitor the drone's status to confirm landing.")
             
-        else:
+        elif args.takeoff:
             print(f"Command: TAKEOFF to {args.altitude}m")
             if not takeoff_px4(master, takeoff_altitude=args.altitude):
                 print("Takeoff sequence failed. Exiting.")
@@ -166,6 +221,14 @@ def main():
             
             print("\nTakeoff sequence completed successfully!")
             print("Monitor the drone's status to confirm takeoff.")
+        
+        else:
+            # Altitude only
+            print(f"Command: SET_ALTITUDE to {args.altitude}m")
+            if not set_altitude_px4(master, altitude=args.altitude):
+                print("Set altitude command failed. Exiting.")
+                sys.exit(1)
+            print("\nSet altitude command sent successfully!")
         
     except KeyboardInterrupt:
         print("\nInterrupted by user. Exiting.")
@@ -175,9 +238,6 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()
