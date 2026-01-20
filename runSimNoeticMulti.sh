@@ -8,24 +8,94 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CONTAINER_NAME="px4-noetic-sim-ros"
 
-# Cleanup function to be called on script exit
+# Cleanup function to be called on script exit or --kill
 cleanup_on_exit() {
     echo ""
-    echo "Cleaning up on exit..."
+    echo "Cleaning up..."
+    
+    # Remove container
+    echo "Removing container..."
     docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+    
     # Clean up X11
+    echo "Cleaning up X11 resources..."
     xhost -local:docker 2>/dev/null || true
     xhost - 2>/dev/null || true
-    # Clean up any leftover X11 lock files (but not socket files)
     rm -f /tmp/.X*-lock 2>/dev/null || true
+    
+    # Clean up processes
+    echo "Killing related processes..."
+    pkill -x px4 2>/dev/null || true
+    pkill gzclient 2>/dev/null || true
+    pkill gzserver 2>/dev/null || true
+    pkill -f "gz master" 2>/dev/null || true
+    pkill -f "gazebo.*master" 2>/dev/null || true
+    
+    # Kill process on port 11345 if any
+    if lsof -ti:11345 >/dev/null 2>&1; then
+        echo "Killing process using Gazebo master port 11345..."
+        lsof -ti:11345 | xargs kill -9 2>/dev/null || true
+    fi
 }
+
+# Default values
+NUM_DRONES=1
+POSITIONS_FILE="${SCRIPT_DIR}/multidrone/positions.txt"
+
+# Argument parsing
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Script to start PX4 multi-drone simulation in Docker."
+            echo ""
+            echo "Options:"
+            echo "  --help, -h               Show this help message and exit"
+            echo "  --kill                   Clean up/kill existing simulation containers and processes"
+            echo "  --num=N, --num N         Number of drones to spawn (default: 1)"
+            echo "  --file=PATH, --file PATH Path to positions file (default: multidrone/positions.txt)"
+            echo ""
+            exit 0
+            ;;
+        --kill)
+            echo "Kill command received."
+            cleanup_on_exit
+            exit 0
+            ;;
+        --num=*)
+            NUM_DRONES="${1#*=}"
+            shift
+            ;;
+        --num)
+            NUM_DRONES="$2"
+            shift 2
+            ;;
+        --file=*)
+            POSITIONS_FILE="${1#*=}"
+            shift
+            ;;
+        --file)
+            POSITIONS_FILE="$2"
+            shift 2
+            ;;
+        [0-9]*)
+            NUM_DRONES="$1"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information."
+            exit 1
+            ;;
+    esac
+done
 
 # Set trap to cleanup on script exit
 trap cleanup_on_exit EXIT INT TERM
 
-# Clean up any leftover X11 lock files from previous runs (but not socket files)
-echo "Cleaning up X11 resources..."
-rm -f /tmp/.X*-lock 2>/dev/null || true
+# Initial cleanup to ensure clean state
+cleanup_on_exit
 
 # Setup X11 forwarding
 xhost + 2>/dev/null || true
@@ -42,47 +112,29 @@ if [ -z "$XAUTHORITY" ] && [ -f "$HOME/.Xauthority" ]; then
     export XAUTHORITY="$HOME/.Xauthority"
 fi
 
-# Remove existing container if it exists (whether running or stopped)
-echo "Removing existing container if present..."
-docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
-
-# Wait a moment to ensure container is fully removed
-sleep 1
-
-# Verify container is removed
-if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo "Warning: Container still exists, forcing removal..."
-    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
-    sleep 1
-fi
-
-# Clean up any leftover processes from previous runs
-# These might still be running if the previous container crashed
-echo "Cleaning up leftover processes..."
-pkill -x px4 2>/dev/null || true
-pkill gzclient 2>/dev/null || true
-pkill gzserver 2>/dev/null || true
-# Kill Gazebo master process (runs on port 11345)
-pkill -f "gz master" 2>/dev/null || true
-pkill -f "gazebo.*master" 2>/dev/null || true
-# Give processes a moment to terminate
-sleep 2
-
-# Additional cleanup: kill any processes using Gazebo ports
-# Gazebo master typically uses port 11345
-if lsof -ti:11345 >/dev/null 2>&1; then
-    echo "Killing process using Gazebo master port 11345..."
-    lsof -ti:11345 | xargs kill -9 2>/dev/null || true
-    sleep 1
-fi
-
 # Build docker run command with conditional XAUTHORITY volume
 XAUTH_FILE="${XAUTHORITY:-$HOME/.Xauthority}"
-DOCKER_VOLUMES=(
-    --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw"
-    --volume="${SCRIPT_DIR}/multidrone/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw"
-    --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw"
-)
+
+# Determine positions file mount
+DEFAULT_POSITIONS="${SCRIPT_DIR}/multidrone/positions.txt"
+if [ "$POSITIONS_FILE" = "$DEFAULT_POSITIONS" ]; then
+    # Use default positions file location
+    CONTAINER_POSITIONS_PATH="/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt"
+    DOCKER_VOLUMES=(
+        --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw"
+        --volume="${POSITIONS_FILE}:${CONTAINER_POSITIONS_PATH}:rw"
+        --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw"
+    )
+else
+    # Use custom positions file
+    CONTAINER_POSITIONS_PATH="/tmp/custom_positions.txt"
+    DOCKER_VOLUMES=(
+        --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw"
+        --volume="${SCRIPT_DIR}/multidrone/positions.txt:/home/valentin/PX4-Autopilot/Tools/simulation/positions.txt:rw"
+        --volume="${POSITIONS_FILE}:${CONTAINER_POSITIONS_PATH}:ro"
+        --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw"
+    )
+fi
 
 # Add XAUTHORITY volume only if file exists
 if [ -f "$XAUTH_FILE" ]; then
@@ -99,6 +151,6 @@ docker run -it --net=host \
            "${DOCKER_VOLUMES[@]}" \
            --name=${CONTAINER_NAME} \
            ${CONTAINER_NAME} \
-           /bin/bash -c "./Tools/simulation/gazebo-classic/sitl_multiple_run2.sh ./Tools/simulation/positions.txt"
+           /bin/bash -c "./Tools/simulation/gazebo-classic/sitl_multiple_run2.sh -p ${CONTAINER_POSITIONS_PATH} -n ${NUM_DRONES}"
 
 # Note: Cleanup is handled by the trap function on exit
