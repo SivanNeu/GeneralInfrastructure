@@ -2,6 +2,46 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-01-23] Multi-Drone Hardware Adapter Fix
+- **`hardware_adapter/hardware_adapter_multi.sh`**:
+    - **Fixed Command Uplink**: Configured `zmq_commands_mavlink` to use Client Mode, sending directly to the drone's listening port (`127.0.0.1:14580+i`).
+    - **Added Target System ID**: Now identifying the target drone by passing `--target-system $((i+1))` to the command bridge.
+    - **Rationale**: This resolves the issue where the command bridge would not connect or would send commands to the wrong System ID in multi-drone simulations (where drones are assigned IDs starting from 2) because it wasn't receiving heartbeats to "learn" the configuration.
+
+## [2026-01-22] MAVLink Altitude Control Fix
+- **`multidrone/mavlinkTakeoffLandAlt.py`**:
+    - Fixed altitude command failure where drone would not reach target.
+    - Implemented closed-loop control: monitors altitude in real-time.
+    - Added robust message reception (blocking wait) to prevent silent loops.
+    - Implemented smart early exit: returns immediately if already at target.
+    - Increased pre-OFFBOARD setpoints (10 -> 20) to ensure mode switch.
+    - Extended control timeout (15s -> 30s) with early exit on success.
+
+## [2026-01-21] ZMQ Takeoff/Land Debugging
+- **`multidrone/zmqTakeoffLandAlt.py`**:
+    - Updated default ZMQ ports: `7700` (commands out) and `9900` (state in).
+    - Renamed arguments for clarity: `--zmqcmd` and `--zmqstate` (with legacy support).
+    - Improved command reliability with ZMQ `LINGER` and post-send `time.sleep(1.0)`.
+- **`multidrone/run_multidrone_bridges.sh`**:
+    - Swapped ZMQ ports to match Python script defaults (`MAVLINK_TO_ZMQ`=9900, `ZMQ_COMMANDS_MAVLINK`=7700).
+
+## [2026-01-21] OFFBOARD Altitude Control
+- **`multidrone/zmqTakeoffLandAlt.py`**:
+    - Implemented 10Hz feedback control loop for altitude changes using OFFBOARD mode.
+    - Sends `quadPosNedCmd` (position setpoints) preserving X/Y while changing Z.
+    - Sends `quadModeCmd` to switch to OFFBOARD before control, HOLD after reaching target.
+    - Renamed `--zmq=` to `--zmqout=`, added `--zmqin=` for drone state subscription.
+    - Added `--threshold=` and `--time=` for control tuning.
+    - Usage: `--altitude=X --zmqin=PORT --zmqout=PORT`
+- **`hardware_adapter/include/command_queue.h`**:
+    - Added `CMD_TYPE_POS_NED` and `CMD_TYPE_MODE` command types.
+    - Added mode ID constants: `MODE_ID_OFFBOARD`, `MODE_ID_HOLD`, `MODE_ID_LOITER`.
+- **`hardware_adapter/include/zmq_topics.h`**:
+    - Added `quadPosNedCmd` (position setpoint) and `quadModeCmd` (mode switch) topics.
+- **`hardware_adapter/src/zmq_commands_mavlink.c`**:
+    - Added handlers for `quadPosNedCmd` → `SET_POSITION_TARGET_LOCAL_NED`.
+    - Added handlers for `quadModeCmd` → `MAV_CMD_DO_SET_MODE`.
+
 ## [2026-01-20] ZMQ Command Tool
 - **`multidrone/simpleZMQtakeoffland.py`**:
     - Refactored to use `argparse` for robust argument parsing.
