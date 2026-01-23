@@ -113,13 +113,19 @@ def takeoff_px4(master, takeoff_altitude=10.0, max_attempts=3):
         arm_msg = master.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
         print(f"Arm ACK:  {arm_msg}")
         
-        # Wait 15 seconds before verification
-        print("Waiting 15 seconds before verification...")
-        time.sleep(15)
+        # Wait up to 15 seconds with verification polling
+        print("Polling status for verification (max 15s)...")
+        verification_success = False
+        for poll_attempt in range(15):
+            time.sleep(1)
+            if verify_takeoff(master):
+                print(f"✓ Takeoff detected after {poll_attempt + 1} seconds.")
+                verification_success = True
+                break
         
-        # Verify takeoff
-        print("Verifying takeoff status...")
-        if verify_takeoff(master):
+        # Final verification and stability sleep
+        if verification_success:
+            time.sleep(1) # Extra stability sleep
             print(f"✓ Takeoff successful on attempt {attempt}!")
             return True
         else:
@@ -185,13 +191,19 @@ def land_px4(master, max_attempts=3):
                 print(f"{'='*60}")
                 return False
         
-        # Wait 15 seconds before verification
-        print("Waiting 15 seconds before verification...")
-        time.sleep(15)
+        # Wait up to 15 seconds with verification polling
+        print("Polling status for verification (max 15s)...")
+        verification_success = False
+        for poll_attempt in range(15):
+            time.sleep(1)
+            if verify_landing(master):
+                print(f"✓ Landing detected after {poll_attempt + 1} seconds.")
+                verification_success = True
+                break
         
-        # Verify landing
-        print("Verifying landing status...")
-        if verify_landing(master):
+        # Final verification and stability sleep
+        if verification_success:
+            time.sleep(1) # Extra stability sleep
             print(f"✓ Landing successful on attempt {attempt}!")
             return True
         else:

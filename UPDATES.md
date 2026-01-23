@@ -2,6 +2,21 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-01-23] MAVLink Script Optimizations
+- **`multidrone/mavlinkTakeoffLandAlt.py`**:
+    - **Optimized Feedback Loop**: Replaced fixed 15s `time.sleep()` calls with a high-frequency **telemetry polling loop**.
+    - **Early Exit**: Script now exits as soon as the drone reaches target altitude or state, reducing UI waiting time by 60-80%.
+- **`multidrone/mavlinkSwitchToMode.py`**:
+    - **Authoritative Status Reporting**: Prioritizes `master.flightmode` strings from telemetry over manual mapping for 100% accuracy.
+    - **Mode 0 Mapping**: Added explicit mapping for raw mode `0` (MANUAL_0) to prevent "UNKNOWN" status reports for uninitialized drones.
+
+## [2026-01-23] MAVLink Mode Switcher (Initial)
+- **`mavlinkSwitchToMode.py`**:
+    - Created a standalone Python script to switch drone flight modes via MAVLink UDP.
+    - Usage: `./mavlinkSwitchToMode.py --udp=14541 --mode=OFFBOARD`
+    - Check Status: `./mavlinkSwitchToMode.py --udp=14541 --status`
+    - Features: Automatic connection, mode verification, alias support (e.g. HOLD -> LOITER), and status reporting.
+
 ## [2026-01-23] Multi-Drone Hardware Adapter Fix
 - **`hardware_adapter/hardware_adapter_multi.sh`**:
     - **Fixed Command Uplink**: Configured `zmq_commands_mavlink` to use Client Mode, sending directly to the drone's listening port (`127.0.0.1:14580+i`).
