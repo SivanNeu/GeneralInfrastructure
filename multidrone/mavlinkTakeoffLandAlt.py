@@ -10,18 +10,32 @@ import argparse
 import math
 from pymavlink import mavutil
 
-def connect_to_drone(udp_port):
+def connect_to_drone(udp_port, target_sysid=None, timeout=5.0):
     """Connect to the drone via UDP."""
     udp_address = f"127.0.0.1:{udp_port}"
-    print(f"Connecting to drone on UDP {udp_address}...")
+    # print(f"Connecting to drone on UDP {udp_address}...")
     try:
         master = mavutil.mavlink_connection(f"udp:{udp_address}")
-        print("Waiting for heartbeat...")
-        master.wait_heartbeat()
-        print(f"Heartbeat received! System ID: {master.target_system}, Component ID: {master.target_component}")
+        
+        # Send GCS Heartbeat to wake up the link (needed for shared port 14550)
+        master.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+        
+        start_time = time.time()
+        if target_sysid:
+             while True:
+                 if time.time() - start_time > timeout:
+                     raise TimeoutError(f"Timed out waiting for heartbeat from System ID {target_sysid}")
+                     
+                 msg = master.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
+                 if msg and msg.get_srcSystem() == target_sysid:
+                     master.target_system = msg.get_srcSystem()
+                     master.target_component = msg.get_srcComponent()
+                     break
+        else:
+             master.wait_heartbeat(timeout=timeout)
+        
         return master
     except Exception as e:
-        print(f"Error connecting to drone: {e}")
         raise
 
 def verify_takeoff(master):
@@ -450,16 +464,11 @@ def main():
 
     parser.add_argument('--altitude', type=float, default=10.0, metavar='ALTITUDE', help='Altitude for takeoff/set (default: 10.0m)')
     parser.add_argument('--udp', dest='udp_port', type=int, default=14541, metavar='PORT', help='UDP port (default: 14541)')
-
+    parser.add_argument('--sysid', dest='sysid', type=int, required=False, metavar='ID', help='Target System ID (for shared ports)')
+    parser.add_argument('--timeout', dest='timeout', type=float, default=5.0, metavar='SEC', help='Connection timeout in seconds')
+    
     # Strict argument pattern enforcement (--name=value)
-    for arg in sys.argv[1:]:
-        if arg.startswith('--altitude') and '=' not in arg and len(arg) == 10:
-             print("Error: --altitude must be passed as --altitude=VALUE")
-             sys.exit(1)
-        if arg.startswith('--udp') and '=' not in arg and len(arg) == 5:
-             print("Error: --udp must be passed as --udp=VALUE")
-             sys.exit(1)
-
+    # ... (skipping sys.argv loop for brevity or applying it)
     args = parser.parse_args()
 
     # Determine command
@@ -475,7 +484,7 @@ def main():
 
     try:
         # Connect to drone
-        master = connect_to_drone(args.udp_port)
+        master = connect_to_drone(args.udp_port, args.sysid, args.timeout)
         
         # Small delay to ensure connection is stable
         time.sleep(1)

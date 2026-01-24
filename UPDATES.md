@@ -2,6 +2,13 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-01-24] MAVLink Routing & Compatibility Fixes
+- **Dynamic Port Configuration**:
+    - Updated all flight command and mode transition logic to support shared (14550) and individual (14540+i / 14030+i) MAVLink ports.
+- **`multidrone/mavlinkTakeoffLandAlt.py` & `multidrone/mavlinkSwitchToMode.py`**:
+    - **SysID Targeting Fix**: Scripts now correctly initialize `master.target_system` and `master.target_component` by waiting for a heartbeat from the specific target SysID. 
+    - **Rationale**: Essential for shared MAVLink ports (14550) where multiple drones transmit on the same link with different IDs.
+
 ## [2026-01-23] MAVLink Script Optimizations
 - **`multidrone/mavlinkTakeoffLandAlt.py`**:
     - **Optimized Feedback Loop**: Replaced fixed 15s `time.sleep()` calls with a high-frequency **telemetry polling loop**.
@@ -13,9 +20,12 @@ This file documents the development progress and changes made to the `CatSwarm/g
 ## [2026-01-23] MAVLink Mode Switcher (Initial)
 - **`mavlinkSwitchToMode.py`**:
     - Created a standalone Python script to switch drone flight modes via MAVLink UDP.
-    - Usage: `./mavlinkSwitchToMode.py --udp=14541 --mode=OFFBOARD`
-    - Check Status: `./mavlinkSwitchToMode.py --udp=14541 --status`
-    - Features: Automatic connection, mode verification, alias support (e.g. HOLD -> LOITER), and status reporting.
+    - Updated to support numerical mode mapping (reliable verification) and `--status` flag.
+    - Added `--sysid` for filtering drones on shared ports.
+- **`drone_control.sh`**:
+    - Created a convenience wrapper script.
+    - Automatically maps `--index=N` to System ID `N+1` and targets port 14550.
+    - Usage: `./drone_control.sh --index=1 --mode=OFFBOARD`
 
 ## [2026-01-23] Multi-Drone Hardware Adapter Fix
 - **`hardware_adapter/hardware_adapter_multi.sh`**:

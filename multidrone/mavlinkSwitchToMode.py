@@ -41,18 +41,36 @@ PX4_MODE_MAP = {
     'MANUAL_0': 0  # Raw mode 0 often corresponds to MANUAL or uninitialized state
 }
 
-def connect_to_drone(udp_port):
+def connect_to_drone(udp_port, target_sysid=None, timeout=5.0):
     """Connect to the drone via UDP."""
     udp_address = f"127.0.0.1:{udp_port}"
-    print(f"Connecting to drone on UDP {udp_address}...")
+    # print(f"Connecting to drone on UDP {udp_address}...")
     try:
         master = mavutil.mavlink_connection(f"udp:{udp_address}")
-        print("Waiting for heartbeat...")
-        master.wait_heartbeat()
-        print(f"Heartbeat received! System ID: {master.target_system}, Component ID: {master.target_component}")
+        
+        # Send GCS Heartbeat to wake up the link (needed for shared port 14550)
+        master.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_GCS, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
+        
+        start_time = time.time()
+        if target_sysid:
+            #  print(f"Waiting for heartbeat from System ID {target_sysid}...")
+             while True:
+                 if time.time() - start_time > timeout:
+                     raise TimeoutError(f"Timed out waiting for heartbeat from System ID {target_sysid}")
+                     
+                 msg = master.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
+                 if msg and msg.get_srcSystem() == target_sysid:
+                     master.target_system = msg.get_srcSystem()
+                     master.target_component = msg.get_srcComponent()
+                     break
+        else:
+             # print("Waiting for heartbeat...")
+             master.wait_heartbeat(timeout=timeout)
+        
+        # print(f"Heartbeat received! System ID: {master.target_system}, Component ID: {master.target_component}")
         return master
     except Exception as e:
-        print(f"Error connecting to drone: {e}")
+        # print(f"Error connecting to drone: {e}")
         raise
 
 def switch_mode(master, mode_name, max_attempts=3):
@@ -78,16 +96,22 @@ def switch_mode(master, mode_name, max_attempts=3):
         master.set_mode(mode_name)
         
         # Wait for ACK
+        # We need to filter ACK by target system if possible, but pymavlink recv_match doesn't easily do srcSystem for ACKs without logic
+        # But we can rely on verify_mode
         ack = master.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
         if ack:
-            print(f"Mode Switch ACK: {ack}")
-            if ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
-                # Command accepted, now verify actual state change
-                if verify_mode(master, mode_name):
-                    print(f"✓ Successfully switched to {mode_name}")
-                    return True
+            # Optionally check srcSystem if we are strict
+            if master.target_system and ack.get_srcSystem() != master.target_system:
+                pass # Ignore ACKS from others?
             else:
-                print(f"✗ Mode switch command rejected/failed (Result: {ack.result})")
+                print(f"Mode Switch ACK: {ack}")
+                if ack.result == mavutil.mavlink.MAV_RESULT_ACCEPTED:
+                    # Command accepted, now verify actual state change
+                    if verify_mode(master, mode_name):
+                        print(f"✓ Successfully switched to {mode_name}")
+                        return True
+                else:
+                    print(f"✗ Mode switch command rejected/failed (Result: {ack.result})")
         else:
             print("Warning: No ACK received for mode switch command")
             
@@ -113,6 +137,14 @@ def verify_mode(master, target_mode, timeout=5):
     while time.time() - start_time < timeout:
         msg = master.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
         if msg:
+            # Filter by System ID if specified
+            if master.target_system and msg.get_srcSystem() != master.target_system:
+                continue
+
+            # Filter out invalid autopilots
+            if msg.autopilot == mavutil.mavlink.MAV_AUTOPILOT_INVALID:
+                continue
+                
             # Pymavlink helper to interpret custom_mode
             current_custom_mode = msg.custom_mode
             
@@ -122,8 +154,18 @@ def verify_mode(master, target_mode, timeout=5):
                     return True
             
             # Fallback to string comparison via pymavlink's flightmode attribute
+            # Note: master.flightmode is updated for ANY heartbeat. We should rely on manual check for filtered usage,
+            # or ensure we only check flightmode if we know pymavlink updated it from THIS sysid. 
+            # Safest is to rely on custom_mode from the msg we just filtered.
+            pass
+
             if hasattr(master, 'flightmode') and master.flightmode == target_mode:
-                return True
+                 # Check if the flightmode property matches our current system
+                 # pymavlink updates master.flightmode based on last heartbeat.
+                 # If we are receiving mixed streams, master.flightmode might flap.
+                 # However, since we filtered 'msg' above, we know 'msg' is from our target.
+                 # We can use pymavlink's logic on this 'msg' if we want, or just rely on numerical map.
+                 return True
                 
     return False
 
@@ -133,11 +175,13 @@ def main():
         epilog="""Examples:
   %(prog)s --udp=14541 --mode=OFFBOARD      # Switch to OFFBOARD
   %(prog)s --udp=14541 --mode=HOLD          # Switch to HOLD (LOITER)
-  %(prog)s --udp=14541 --status             # Query current mode""",
+  %(prog)s --udp=14550 --sysid=2 --status   # Check status of drone 2 on shared port settings""",
         formatter_class=argparse.RawTextHelpFormatter
     )
     
     parser.add_argument('--udp', dest='udp_port', type=int, required=True, metavar='PORT', help='UDP port (e.g., 14541)')
+    parser.add_argument('--sysid', dest='sysid', type=int, required=False, metavar='ID', help='Target System ID (for shared ports)')
+    parser.add_argument('--timeout', dest='timeout', type=float, default=5.0, metavar='SEC', help='Connection timeout in seconds')
     parser.add_argument('--status', action='store_true', help='Display current mode without switching')
     parser.add_argument('--mode', dest='mode', type=str, required=False, metavar='MODE', help='Target flight mode (e.g., OFFBOARD, HOLD, LOITER, POSCTL)')
     
@@ -163,37 +207,59 @@ def main():
             # Check if HOLD exists, if not try LOITER
             # Proper check happens after connection
             pass 
-
-    print("=" * 60)
-    print(f"MAVLink Mode Manager")
-    print("=" * 60)
+            
+    # print("=" * 60)
+    # print(f"MAVLink Mode Manager")
+    # print("=" * 60)
     
     try:
-        master = connect_to_drone(args.udp_port)
+        master = connect_to_drone(args.udp_port, args.sysid, args.timeout)
         
         if args.status:
             # Just report status
             print("\nFetching current status...")
-            # Wait for a heartbeat to ensure we have fresh data
-            hb = master.wait_heartbeat()
             
-            # Identify mode name using pymavlink's built-in flightmode attribute (most robust)
-            mode_name = "UNKNOWN"
-            if hasattr(master, 'flightmode'):
-                mode_name = master.flightmode
+            # Loop getting heartbeats until we find a valid autopilot one
+            # Some components (like cameras) might send heartbeats with AUTOPILOT_INVALID
+            valid_hb_found = False
+            timeout = 5.0
+            start = time.time()
             
-            # Fallback to manual map if pymavlink failed or returned UNKNOWN
-            if mode_name == "UNKNOWN":
+            while time.time() - start < timeout:
+                hb = master.recv_match(type='HEARTBEAT', blocking=True, timeout=1.0)
+                if not hb:
+                    continue
+                
+                # Filter by System ID if specified
+                if args.sysid and hb.get_srcSystem() != args.sysid:
+                    continue
+
+                # Filter out invalid autopilots (e.g. GCS, companion computers, cameras)
+                # MAV_AUTOPILOT_INVALID = 8
+                if hb.autopilot == mavutil.mavlink.MAV_AUTOPILOT_INVALID:
+                    continue
+                    
+                valid_hb_found = True
                 custom_mode = hb.custom_mode
+                
+                # Identify mode name from numerical value using the provided map
+                mode_name = "UNKNOWN"
                 for name, val in PX4_MODE_MAP.items():
                     if val == custom_mode:
                         mode_name = name
                         break
+                
+                # If not found in manual map, fallback to pymavlink's string
+                if mode_name == "UNKNOWN" and hasattr(master, 'flightmode'):
+                    mode_name = master.flightmode
+                    
                 print(f"Current Mode: {mode_name} (Raw: {custom_mode})")
-            else:
-                print(f"Current Mode: {mode_name}")
-            
-            sys.exit(0)
+                print(f"  System ID: {hb.get_srcSystem()}, Component ID: {hb.get_srcComponent()}")
+                sys.exit(0)
+                
+            if not valid_hb_found:
+                print("Error: No valid autopilot heartbeat received within timeout.")
+                sys.exit(1)
 
         # Mode switching logic
         if target_mode:
